@@ -1,0 +1,259 @@
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import formbody from "@fastify/formbody";
+import fastifyStatic from "@fastify/static";
+import dotenv from "dotenv";
+import twilio from "twilio";
+import path from "path";
+import fs from "fs";
+import crypto from "crypto";
+import OpenAI from "openai";
+
+dotenv.config();
+
+const app = Fastify({ logger: true });
+
+await app.register(cors, { origin: true });
+await app.register(formbody);
+
+// Serve static files from ./public (so Twilio can play mp3 URLs)
+await app.register(fastifyStatic, {
+  root: path.join(process.cwd(), "public"),
+  prefix: "/",
+});
+
+const PORT = Number(process.env.PORT || 3000);
+const BASE_URL = (process.env.BASE_URL || "").trim(); // your ngrok https url
+
+// ElevenLabs
+const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_VOICE_ID = (process.env.ELEVENLABS_VOICE_ID || "").trim();
+
+// OpenAI
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_MODEL = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+
+// Business rules
+const COMPANY_NAME = (process.env.COMPANY_NAME || "HVAC Dispatch").trim();
+const DIAGNOSTIC_FEE = (process.env.DIAGNOSTIC_FEE || "$99").trim();
+const HOURS = (process.env.HOURS || "Mon–Fri 8am–6pm").trim();
+const SERVICE_AREAS = (process.env.SERVICE_AREAS || "Orlando").trim();
+const BOOKING_URL = (process.env.BOOKING_URL || "").trim();
+
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+// simple per-call memory
+type Msg = { role: "system" | "user" | "assistant"; content: string };
+const memory = new Map<string, Msg[]>();
+
+function ensureAudioDir() {
+  const dir = path.join(process.cwd(), "public", "audio");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+async function elevenLabsTTS(text: string): Promise<string> {
+  if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) {
+    throw new Error("Missing ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID");
+  }
+
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": ELEVENLABS_API_KEY,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_monolingual_v1",
+      voice_settings: { stability: 0.35, similarity_boost: 0.85 },
+    }),
+  });
+
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`ElevenLabs error ${resp.status}: ${msg}`);
+  }
+
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const dir = ensureAudioDir();
+  const file = `tts_${crypto.randomBytes(8).toString("hex")}.mp3`;
+  fs.writeFileSync(path.join(dir, file), buf);
+
+  return `/audio/${file}`;
+}
+
+function systemPrompt() {
+  return `
+You are ${COMPANY_NAME}'s phone receptionist.
+Be concise, warm, and helpful.
+If the user asks about pricing, use these business facts:
+- Diagnostic fee: ${DIAGNOSTIC_FEE}
+- Hours: ${HOURS}
+- Service areas: ${SERVICE_AREAS}
+
+Appointments:
+- If the user wants to book, first ask for: name, address (or zip), preferred day/time, and whether it's AC/heat/other.
+- If BOOKING_URL is set, offer it and ALSO offer to take details on the phone.
+
+Rules:
+- If you don't know something, say so and offer the next best step.
+- Avoid long paragraphs (phone-friendly).
+- Always ask 1 short follow-up question when needed.
+`.trim();
+}
+
+async function askAI(callSid: string, userText: string): Promise<string> {
+  // If no OpenAI key, fallback
+  if (!openai) {
+    return `For pricing, our diagnostic fee is ${DIAGNOSTIC_FEE}. What city are you in, and what’s the issue?`;
+  }
+
+  const prior = memory.get(callSid) || [];
+  const msgs: Msg[] = [
+    { role: "system", content: systemPrompt() },
+    ...prior,
+    { role: "user", content: userText },
+  ];
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    messages: msgs,
+    temperature: 0.3,
+  });
+
+  const answer = (resp.choices?.[0]?.message?.content || "").trim() || "Can you tell me a little more?";
+
+  // keep short memory
+  const newMem = [...prior, { role: "user", content: userText }, { role: "assistant", content: answer }].slice(-10);
+  memory.set(callSid, newMem);
+
+  return answer;
+}
+
+function buildGreetingTwiml() {
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
+
+  const gather = twiml.gather({
+    input: ["speech"],
+    action: "/voice-intake",
+    method: "POST",
+    speechTimeout: "auto",
+    bargeIn: true,
+  });
+
+  gather.say({ voice: "Polly.Joanna" }, `Thanks for calling ${COMPANY_NAME}. How can I help you today?`);
+
+  twiml.say({ voice: "Polly.Joanna" }, "I didn’t catch that. Please call again. Goodbye.");
+  twiml.hangup();
+
+  return twiml.toString();
+}
+
+app.get("/health", async () => ({ ok: true }));
+
+/**
+ * ENTRY: Twilio Voice webhook
+ * Use app.all so GET or POST both work.
+ */
+app.all("/voice-webhook", async (_req, reply) => {
+  try {
+    const xml = buildGreetingTwiml();
+    reply.status(200).type("text/xml");
+    return reply.send(xml);
+  } catch (err) {
+    app.log.error({ err }, "voice-webhook failed");
+    const VR = twilio.twiml.VoiceResponse;
+    const twiml = new VR();
+    twiml.say({ voice: "Polly.Joanna" }, "Sorry, something went wrong. Please try again.");
+    twiml.hangup();
+    reply.status(200).type("text/xml");
+    return reply.send(twiml.toString());
+  }
+});
+
+/**
+ * Handles the caller speech
+ */
+app.all("/voice-intake", async (req: any, reply) => {
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
+
+  try {
+    const callSid = (req.body?.CallSid ?? req.query?.CallSid ?? "NO_CALLSID").toString();
+    const speech = ((req.body?.SpeechResult ?? req.query?.SpeechResult) || "").toString().trim();
+
+    app.log.info({ callSid, speech }, "Speech captured");
+
+    const aiText = speech.length
+      ? await askAI(callSid, speech)
+      : "I didn't catch that—what can I help you with?";
+
+    // If user wants booking and you have booking URL, include it
+    let finalText = aiText;
+    if (BOOKING_URL && /book|appointment|schedule/i.test(speech)) {
+      finalText = `${aiText} You can also book here: ${BOOKING_URL}. What’s your name and zip code?`;
+    }
+
+    // Prefer ElevenLabs audio if possible; otherwise Polly
+    let audioPath: string | null = null;
+    try {
+      audioPath = await elevenLabsTTS(finalText);
+    } catch (e) {
+      app.log.error({ err: e }, "ElevenLabs failed; falling back to Polly");
+      audioPath = null;
+    }
+
+    const gather = twiml.gather({
+      input: ["speech"],
+      action: "/voice-intake",
+      method: "POST",
+      speechTimeout: "auto",
+      bargeIn: true,
+    });
+
+    if (audioPath && BASE_URL.startsWith("https://")) {
+      // put the audio inside the Gather so caller can interrupt
+      gather.play(`${BASE_URL}${audioPath}`);
+    } else {
+      gather.say({ voice: "Polly.Joanna" }, finalText);
+    }
+
+    // If they say nothing next, end politely
+    twiml.say({ voice: "Polly.Joanna" }, "Thanks for calling. Goodbye.");
+    twiml.hangup();
+
+    reply.status(200).type("text/xml");
+    return reply.send(twiml.toString());
+  } catch (err) {
+    app.log.error({ err }, "voice-intake crashed");
+    twiml.say({ voice: "Polly.Joanna" }, "Sorry—I'm still here. Please repeat that.");
+    twiml.hangup();
+    reply.status(200).type("text/xml");
+    return reply.send(twiml.toString());
+  }
+});
+
+/**
+ * Global error handler: never send 500 to Twilio
+ */
+app.setErrorHandler((err, _req, reply) => {
+  app.log.error({ err }, "Global error handler");
+  try {
+    const VR = twilio.twiml.VoiceResponse;
+    const twiml = new VR();
+    twiml.say({ voice: "Polly.Joanna" }, "Sorry—please try again.");
+    reply.status(200).type("text/xml").send(twiml.toString());
+  } catch {
+    reply.status(200).type("text/xml").send("<Response><Say>Okay.</Say></Response>");
+  }
+});
+
+app.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
+  app.log.info(`🚀 Server listening on :${PORT}`);
+});
+
