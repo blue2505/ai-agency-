@@ -253,6 +253,8 @@ function cleanTimeForConfirmation(text: string) {
   let cleaned = t
     .replace(/^can we do it at\s+/i, "")
     .replace(/^can we do\s+/i, "")
+    .replace(/^does\s+/i, "")
+    .replace(/^do(?:es)?\s+/i, "")
     .replace(/^i want\s+/i, "")
     .replace(/^let's do\s+/i, "")
     .replace(/^how about\s+/i, "")
@@ -379,6 +381,11 @@ async function speakText(
   text: string,
   fallbackVoice = "Polly.Joanna"
 ) {
+async function speakText(
+  twiml: any,
+  text: string,
+  fallbackVoice = "Polly.Joanna"
+) {
   try {
     if (!BASE_URL.startsWith("https://")) {
       throw new Error("BASE_URL must be public HTTPS");
@@ -409,16 +416,30 @@ const gather = twiml.gather({
   profanityFilter: false,
 });
 
-  try {
-    if (!BASE_URL.startsWith("https://")) {
-      throw new Error("BASE_URL must be public HTTPS");
-    }
-    const audioPath = await elevenLabsTTS(text);
-    gather.play(`${BASE_URL}${audioPath}`);
-  } catch (e) {
-    app.log.error({ err: e }, "TTS failed, using Twilio fallback");
-    gather.say({ voice: "Polly.Joanna" }, text);
+const lower = text.toLowerCase();
+
+const usePremiumVoice =
+  text.length <= 140 &&
+  !lower.includes("i didn't catch that") &&
+  !lower.includes("please say that again") &&
+  !lower.includes("please say the email") &&
+  !lower.includes("say your email slowly") &&
+  !lower.includes("or say skip");
+
+try {
+  if (!BASE_URL.startsWith("https://")) {
+    throw new Error("BASE_URL must be public HTTPS");
   }
+
+if (!usePremiumVoice) {
+  throw new Error("Using Twilio fallback for long or low-value prompts");
+}
+
+  const audioPath = await elevenLabsTTS(text);
+  gather.play(`${BASE_URL}${audioPath}`);
+} catch (e) {
+  app.log.error({ err: e }, "TTS skipped or failed, using Twilio voice");
+  gather.say({ voice: "Polly.Joanna" }, text);
 }
 
 function getSpecificPriceReply(text: string): string | null {
@@ -828,13 +849,6 @@ async function createHubSpotContact(booking: BookingRecord) {
   }
 
    properties.hs_lead_status = "NEW";
-
-  const noteParts = [
-    `Source: AI Voice Agent`,
-    booking.issue ? `Issue: ${booking.issue}` : "",
-    booking.time ? `Requested time: ${booking.time}` : "",
-    booking.address ? `Address: ${booking.address}` : "",
-  ].filter(Boolean);
 
 const resp = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
   method: "POST",
