@@ -51,6 +51,8 @@ const CONFIRMATION_EMAIL_FROM = (
   process.env.CONFIRMATION_EMAIL_FROM || ""
 ).trim();
 
+const HUBSPOT_API_KEY = (process.env.HUBSPOT_API_KEY || "").trim();
+
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 const smsClient =
@@ -770,6 +772,46 @@ async function maybeSendEmailConfirmation(booking: BookingRecord) {
     to: booking.email,
     subject,
     text,
+  });
+}
+
+async function createHubSpotContact(booking: BookingRecord) {
+  if (!HUBSPOT_API_KEY) return;
+
+  const properties: Record<string, string> = {};
+
+  if (booking.email) {
+    properties.email = booking.email;
+  }
+
+  if (booking.name) {
+    const parts = booking.name.trim().split(/\s+/);
+    properties.firstname = parts[0] || "";
+    if (parts.length > 1) {
+      properties.lastname = parts.slice(1).join(" ");
+    }
+  }
+
+  if (booking.callerPhone) {
+    properties.phone = booking.callerPhone;
+  }
+
+  const noteParts = [
+    `Source: AI Voice Agent`,
+    booking.issue ? `Issue: ${booking.issue}` : "",
+    booking.time ? `Requested time: ${booking.time}` : "",
+    booking.address ? `Address: ${booking.address}` : "",
+  ].filter(Boolean);
+
+  properties.description = noteParts.join(" | ");
+
+  await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${HUBSPOT_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ properties }),
   });
 }
 
