@@ -834,7 +834,7 @@ async function createHubSpotContact(booking: BookingRecord) {
     booking.address ? `Address: ${booking.address}` : "",
   ].filter(Boolean);
 
-  properties.description = noteParts.join(" | ");
+properties.notes = noteParts.join(" | ");
 
 const resp = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
   method: "POST",
