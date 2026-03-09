@@ -1583,7 +1583,8 @@ app.setErrorHandler(async (err, _req, reply) => {
         "I'm sorry, please try again. How can I help you?"
       );
       gather.play(`${BASE_URL}${audioPath}`);
-    } catch {
+      } 
+      catch {
       gather.say(
         { voice: "Polly.Joanna" },
         "I'm sorry, please try again. How can I help you?"
