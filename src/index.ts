@@ -1573,7 +1573,7 @@ app.setErrorHandler(async (err, _req, reply) => {
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
-    speechModel: "phone_call",
+    speechModel: "phone_call"
   });
 
   gather.say(
@@ -1587,6 +1587,7 @@ app.setErrorHandler(async (err, _req, reply) => {
 app.listen({ port: PORT, host: "0.0.0.0" })
   .then(async () => {
     console.log(`Server listening on ${PORT}`);
+
     if (
       ELEVENLABS_API_KEY &&
       ELEVENLABS_VOICE_ID &&
