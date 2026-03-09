@@ -35,7 +35,7 @@ const SERVICE_AREAS = (
 
 const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
 const ELEVENLABS_VOICE_ID = (
-  process.env.ELEVENLABS_VOICE_ID || "8fcyCHOzlKDlxh1InJSf"
+  process.env.ELEVENLABS_VOICE_ID || "xKhbyU7E3bC6T89Kn26c"
 ).trim();
 
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
