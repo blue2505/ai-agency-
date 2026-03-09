@@ -1,4 +1,6 @@
 .env
 node_modules
-public/audio
 dist
+
+public/audio/*
+!public/audio/.keep
