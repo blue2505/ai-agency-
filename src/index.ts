@@ -1273,6 +1273,10 @@ app.post("/voice-intake", async (req: any, reply: any) => {
           app.log.error({ err }, "Email confirmation failed");
         });
 
+        await createHubSpotContact(session.booking).catch((err) => {
+        app.log.error({ err }, "HubSpot contact creation failed");
+        });
+
         session.stage = "normal";
         await addPromptAndGather(
           twiml,
