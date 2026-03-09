@@ -247,6 +247,24 @@ function looksLikeTime(text: string) {
   );
 }
 
+function cleanTimeForConfirmation(text: string) {
+  const t = text.trim();
+
+  let cleaned = t
+    .replace(/^can we do it at\s+/i, "")
+    .replace(/^can we do\s+/i, "")
+    .replace(/^i want\s+/i, "")
+    .replace(/^let's do\s+/i, "")
+    .replace(/^how about\s+/i, "")
+    .replace(/^for\s+/i, "")
+    .replace(/^at\s+/i, "")
+    .trim();
+
+  cleaned = cleaned.replace(/\?$/, "").trim();
+
+  return cleaned || t;
+}
+
 function looksLikeAddress(text: string) {
   const t = text.trim();
   return t.length >= 6 && /\d/.test(t);
@@ -378,17 +396,18 @@ async function addPromptAndGather(
   text: string,
   action = "/voice-intake"
 ) {
-  const gather = twiml.gather({
-    input: ["speech"],
-    action: `${BASE_URL}${action}`,
-    method: "POST",
-    speechTimeout: "auto",
-    timeout: 2,
-    actionOnEmptyResult: true,
-    language: "en-US",
-    enhanced: true,
-    speechModel: "phone_call",
-  });
+const gather = twiml.gather({
+  input: ["speech"],
+  action: `${BASE_URL}${action}`,
+  method: "POST",
+  speechTimeout: 1,
+  timeout: 4,
+  actionOnEmptyResult: true,
+  language: "en-US",
+  enhanced: true,
+  speechModel: "phone_call",
+  profanityFilter: false,
+});
 
   try {
     if (!BASE_URL.startsWith("https://")) {
@@ -776,6 +795,18 @@ async function maybeSendEmailConfirmation(booking: BookingRecord) {
 }
 
 async function createHubSpotContact(booking: BookingRecord) {
+  app.log.info(
+    {
+      hasHubSpotKey: !!HUBSPOT_API_KEY,
+      name: booking.name,
+      email: booking.email,
+      phone: booking.callerPhone,
+      issue: booking.issue,
+      time: booking.time,
+      address: booking.address,
+    },
+    "createHubSpotContact called"
+  );
   if (!HUBSPOT_API_KEY) return;
 
   const properties: Record<string, string> = {};
@@ -805,14 +836,21 @@ async function createHubSpotContact(booking: BookingRecord) {
 
   properties.description = noteParts.join(" | ");
 
-  await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${HUBSPOT_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ properties }),
-  });
+const resp = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${HUBSPOT_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ properties }),
+});
+
+const respText = await resp.text().catch(() => "");
+app.log.info({ status: resp.status, body: respText }, "HubSpot response");
+
+if (!resp.ok) {
+  throw new Error(`HubSpot create failed ${resp.status}: ${respText}`);
+}
 }
 
 async function warmCommonAudio() {
@@ -1203,8 +1241,15 @@ app.post("/voice-intake", async (req: any, reply: any) => {
 
     if (session.stage === "book_email") {
       const t = normalizeText(speech);
+      const wantsSkipEmail =
+      t.includes("skip") ||
+      t.includes("no email") ||
+      t.includes("don't send email") ||
+      t.includes("do not send email") ||
+      t.includes("no thanks") ||
+      t.includes("no thank you");
 
-      if (t.includes("skip") || t.includes("no email")) {
+        if (wantsSkipEmail) {
         session.stage = "book_confirm";
         await addPromptAndGather(
           twiml,
