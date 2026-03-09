@@ -589,7 +589,7 @@ async function addPromptAndGather(
 ) {
   const gather = twiml.gather({
     input: ["speech"],
-    action,
+    action: `${BASE_URL}${action}`,
     method: "POST",
     speechTimeout: 1,
     timeout: 4,
