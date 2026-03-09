@@ -1560,44 +1560,28 @@ app.post("/voice-intake", async (req: any, reply: any) => {
 
 app.setErrorHandler(async (err, _req, reply) => {
   app.log.error({ err }, "Global error handler");
-  try {
-    const VR = twilio.twiml.VoiceResponse;
-    const twiml = new VR();
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: "/voice-intake",
-      method: "POST",
-      speechTimeout: "auto",
-      timeout: 2,
-      actionOnEmptyResult: true,
-      language: "en-US",
-      enhanced: true,
-      speechModel: "phone_call",
-    });
 
-    try {
-      if (!BASE_URL.startsWith("https://")) {
-        throw new Error("BASE_URL must be public HTTPS");
-      }
-      const audioPath = await elevenLabsTTS(
-        "I'm sorry, please try again. How can I help you?"
-      );
-      gather.play(`${BASE_URL}${audioPath}`);
-      } 
-      catch {
-      gather.say(
-        { voice: "Polly.Joanna" },
-        "I'm sorry, please try again. How can I help you?"
-      );
-    }
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
 
-    reply.status(200).type("text/xml").send(twiml.toString());
-  } catch {
-    reply
-      .status(200)
-      .type("text/xml")
-      .send("<Response><Say>Okay.</Say></Response>");
-  }
+  const gather = twiml.gather({
+    input: ["speech"],
+    action: "/voice-intake",
+    method: "POST",
+    speechTimeout: "auto",
+    timeout: 2,
+    actionOnEmptyResult: true,
+    language: "en-US",
+    enhanced: true,
+    speechModel: "phone_call",
+  });
+
+  gather.say(
+    { voice: "Polly.Joanna" },
+    "I'm sorry, something went wrong. How can I help you?"
+  );
+
+  reply.status(200).type("text/xml").send(twiml.toString());
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" })
