@@ -827,14 +827,14 @@ async function createHubSpotContact(booking: BookingRecord) {
     properties.phone = booking.callerPhone;
   }
 
+   properties.hs_lead_status = "NEW";
+
   const noteParts = [
     `Source: AI Voice Agent`,
     booking.issue ? `Issue: ${booking.issue}` : "",
     booking.time ? `Requested time: ${booking.time}` : "",
     booking.address ? `Address: ${booking.address}` : "",
   ].filter(Boolean);
-
-properties.notes = noteParts.join(" | ");
 
 const resp = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
   method: "POST",
