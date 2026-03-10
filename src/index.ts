@@ -727,10 +727,19 @@ async function addPromptAndGather(
     profanityFilter: false,
   });
 
-  if (!shouldUsePremiumVoice(text)) {
-    gather.say({ voice: "Polly.Joanna" }, text);
-    return;
+  try {
+    const audioPath = await elevenLabsTTS(text);
+
+    if (BASE_URL.startsWith("https://")) {
+      gather.play(`${BASE_URL}${audioPath}`);
+      return;
+    }
+  } catch (e) {
+    app.log.error({ err: e }, "ElevenLabs gather audio failed");
   }
+
+  gather.say({ voice: "Polly.Joanna" }, text);
+}
 
   try {
     const audioPath = await elevenLabsTTS(text);
@@ -921,22 +930,43 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
-  const callSid = (req.body?.CallSid || "NO_CALLSID").toString();
-  const callerPhone = (req.body?.From || "").toString().trim();
-  getSession(callSid, callerPhone);
+  try {
+    const callSid = (req.body?.CallSid || "NO_CALLSID").toString();
+    const callerPhone = (req.body?.From || "").toString().trim();
+    getSession(callSid, callerPhone);
 
-  const gather = twiml.gather({
-    input: "speech",
-    action: getAbsoluteUrl("/voice-intake"),
-    method: "POST",
-    speechTimeout: "auto",
-    timeout: 5,
-    actionOnEmptyResult: true,
-    language: "en-US",
-    enhanced: true,
-    speechModel: "phone_call",
-    profanityFilter: false,
-  });
+    await addPromptAndGather(
+      twiml,
+      `Hello, this is ${COMPANY_NAME}, how can I help you?`
+    );
+
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  } catch (err) {
+    app.log.error({ err }, "voice-webhook crashed");
+
+    twiml.say(
+      { voice: "Polly.Joanna" },
+      `Hello, this is ${COMPANY_NAME}, how can I help you?`
+    );
+
+    const gather = twiml.gather({
+      input: "speech",
+      action: getAbsoluteUrl("/voice-intake"),
+      method: "POST",
+      speechTimeout: "auto",
+      timeout: 5,
+      actionOnEmptyResult: true,
+      language: "en-US",
+      enhanced: true,
+      speechModel: "phone_call",
+      profanityFilter: false,
+    });
+
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  }
+});
 
 await addPromptAndGather(
   twiml,
