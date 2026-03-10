@@ -587,17 +587,20 @@ async function addPromptAndGather(
   text: string,
   action = "/voice-intake"
 ) {
+  const actionUrl = BASE_URL.startsWith("https://")
+    ? `${BASE_URL}${action}`
+    : action;
+
   const gather = twiml.gather({
-    input: ["speech"],
-    action: `${BASE_URL}${action}`,
+    input: "speech",
+    action: actionUrl,
     method: "POST",
-    speechTimeout: 1,
+    speechTimeout: "auto",
     timeout: 4,
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
     speechModel: "phone_call",
-    profanityFilter: false,
   });
 
   const lower = text.toLowerCase();
@@ -814,11 +817,12 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
 });
 
 app.post("/voice-intake", async (req: any, reply: any) => {
+console.log("VOICE BODY:", req.body);
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
   try {
-    const speech = ((req.body?.SpeechResult || "") as string).trim();
+    const speech = (req.body?.SpeechResult ?? "").toString().trim();
     const callSid = (req.body?.CallSid || "NO_CALLSID").toString();
     const callerPhone = (req.body?.From || "").toString().trim();
 
@@ -1235,17 +1239,38 @@ app.post("/voice-intake", async (req: any, reply: any) => {
 
 app.setErrorHandler((err, _req, reply) => {
   app.log.error({ err }, "Global error handler");
+
   try {
     const VR = twilio.twiml.VoiceResponse;
     const twiml = new VR();
-    twiml.say(
+
+    const actionUrl = BASE_URL.startsWith("https://")
+      ? `${BASE_URL}/voice-intake`
+      : "/voice-intake";
+
+    const gather = twiml.gather({
+      input: "speech",
+      action: actionUrl,
+      method: "POST",
+      speechTimeout: "auto",
+      timeout: 4,
+      actionOnEmptyResult: true,
+      language: "en-US",
+      enhanced: true,
+      speechModel: "phone_call",
+    });
+
+    gather.say(
       { voice: "Polly.Joanna" },
-      "I'm sorry, please try again."
+      "I'm sorry, something went wrong. How can I help you?"
     );
-    twiml.redirect({ method: "POST" }, "/voice-webhook");
+
     reply.status(200).type("text/xml").send(twiml.toString());
   } catch {
-    reply.status(200).type("text/xml").send("<Response><Say>Okay.</Say></Response>");
+    reply
+      .status(200)
+      .type("text/xml")
+      .send("<Response><Say>I'm sorry, something went wrong.</Say></Response>");
   }
 });
 
