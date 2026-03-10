@@ -1384,16 +1384,15 @@ if (looksLikeUrgentRepair(speech)) {
   return reply.send(twiml.toString());
 }
 
-const aiReply = await assistantReply(speech);
+    const aiReply = await assistantReply(speech);
 
-await addPromptAndGather(
-  twiml,
-  aiReply || "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
-);
+    await addPromptAndGather(
+      twiml,
+      aiReply || "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
+    );
 
-reply.type("text/xml");
-return reply.send(twiml.toString());
-
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
   } catch (err) {
     app.log.error({ err }, "voice-intake crashed");
 
