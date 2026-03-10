@@ -264,13 +264,23 @@ function looksLikeBookingIntent(text: string) {
     "booking",
     "appointment",
     "schedule",
+    "set up",
+    "set something up",
+    "make an appointment",
+    "make appointment",
     "come out",
     "send someone",
     "send a technician",
     "service call",
     "have someone come out",
-    "set something up",
-    "make an appointment",
+    "have somebody come out",
+    "can someone come",
+    "i need someone to come",
+    "i want someone to come",
+    "i want to make an appointment",
+    "i need an appointment",
+    "can i book",
+    "can i schedule"
   ].some((k) => t.includes(k));
 }
 
@@ -566,12 +576,13 @@ async function addPromptAndGather(
     input: "speech",
     action: getAbsoluteUrl(action),
     method: "POST",
-    speechTimeout: 1,
-    timeout: 2,
+    speechTimeout: "auto",
+    timeout: 5,
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
     speechModel: "phone_call",
+    profanityFilter: false,
   });
 
   try {
@@ -1205,23 +1216,32 @@ if (looksLikeUrgentRepair(speech)) {
   return reply.send(twiml.toString());
 }
 
-    const aiReply = await assistantReply(speech);
-    await addPromptAndGather(twiml, aiReply);
-    reply.type("text/xml");
-    return reply.send(twiml.toString());
-  } catch (err) {
-    app.log.error({ err }, "voice-intake crashed");
-    await addPromptAndGather(
-      twiml,
-      "I'm sorry, could you repeat that for me?"
-    );
-    reply.type("text/xml");
-    return reply.send(twiml.toString());
-  }
+const aiReply = await assistantReply(speech);
+
+await addPromptAndGather(
+  twiml,
+  aiReply || "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
+);
+
+reply.type("text/xml");
+return reply.send(twiml.toString());
+
+} catch (err) {
+  app.log.error({ err }, "voice-intake crashed");
+
+  await addPromptAndGather(
+    twiml,
+    "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
+  );
+
+  reply.type("text/xml");
+  return reply.send(twiml.toString());
+}
 });
 
 app.setErrorHandler((err, _req, reply) => {
   app.log.error({ err }, "Global error handler");
+
   try {
     const VR = twilio.twiml.VoiceResponse;
     const twiml = new VR();
@@ -1231,11 +1251,10 @@ app.setErrorHandler((err, _req, reply) => {
       action: getAbsoluteUrl("/voice-intake"),
       method: "POST",
       speechTimeout: "auto",
-      timeout: 4,
-      actionOnEmptyResult: true,
+      timeout: 5,
       language: "en-US",
       enhanced: true,
-      speechModel: "phone_call",
+      speechModel: "phone_call"
     });
 
     gather.say(
@@ -1248,16 +1267,25 @@ app.setErrorHandler((err, _req, reply) => {
     reply
       .status(200)
       .type("text/xml")
-      .send("<Response><Say>I'm sorry, something went wrong.</Say></Response>");
+      .send("<Response><Say>Okay.</Say></Response>");
   }
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" })
   .then(async () => {
     console.log(`Server listening on ${PORT}`);
-    warmCommonAudio().catch((err) => {
-      app.log.error({ err }, "Warmup failed");
-    });
+
+    if (
+      ELEVENLABS_API_KEY &&
+      ELEVENLABS_VOICE_ID &&
+      BASE_URL.startsWith("https://")
+    ) {
+      try {
+        await warmCommonAudio();
+      } catch (err) {
+        app.log.error({ err }, "Warm audio failed");
+      }
+    }
   })
   .catch((err) => {
     console.error(err);
