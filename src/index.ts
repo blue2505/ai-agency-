@@ -10,6 +10,7 @@ import crypto from "crypto";
 import OpenAI from "openai";
 import { google } from "googleapis";
 import chrono from "chrono-node";
+import { Resend } from "resend";
 
 dotenv.config();
 
@@ -72,6 +73,12 @@ const googleAuth =
         scopes: ["https://www.googleapis.com/auth/calendar"],
       })
     : null;
+
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
+const EMAIL_FROM = process.env.EMAIL_FROM || "";
 
 const calendar =
   googleAuth ? google.calendar({ version: "v3", auth: googleAuth }) : null;
@@ -194,7 +201,25 @@ function looksLikeNo(text: string) {
   ].some((k) => t.includes(k));
 }
 
+function looksLikeThanks(text: string) {
+  const t = text.trim().toLowerCase();
+  return [
+    "thank you",
+    "thanks",
+    "thank you so much",
+    "thanks so much",
+    "appreciate it",
+    "perfect thank you",
+    "okay thank you"
+  ].some((k) => t.includes(k));
+}
+
 function looksLikeBye(text: string) {
+  const t = normalizeText(text);
+  return ["bye", "goodbye", "that is all", "that's all", "hang up"].some((k) =>
+    t.includes(k)
+  );
+}
   const t = normalizeText(text);
   return ["bye", "goodbye", "that is all", "that's all", "hang up"].some((k) =>
     t.includes(k)
@@ -722,7 +747,17 @@ async function createCalendarBooking(booking: BookingRecord) {
     "createCalendarBooking called"
   );
 
-  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) return null;
+  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) {
+    app.log.error(
+      {
+        hasCalendar: !!calendar,
+        calendarId: GOOGLE_CALENDAR_ID,
+        bookingTime: booking.time,
+      },
+      "Calendar prerequisites missing"
+    );
+    return null;
+  }
 
   const start = chrono.parseDate(booking.time, new Date(), {
     forwardDate: true,
@@ -733,7 +768,10 @@ async function createCalendarBooking(booking: BookingRecord) {
     "parsed calendar start"
   );
 
-  if (!start) return null;
+  if (!start) {
+    app.log.error({ bookingTime: booking.time }, "Could not parse booking time");
+    return null;
+  }
 
   const end = new Date(start.getTime() + APPOINTMENT_DURATION_MINUTES * 60000);
 
@@ -795,18 +833,19 @@ async function maybeSendEmailConfirmation(booking: BookingRecord) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       to: booking.email,
-      subject: `${COMPANY_NAME} appointment confirmation`,
+      subject: `${COMPANY_NAME} Appointment Confirmation`,
       message:
-        `Your appointment request has been confirmed.\n\n` +
-        `Name: ${booking.name || ""}\n` +
+        `Hello ${booking.name || ""},\n\n` +
+        `Your appointment request has been scheduled.\n\n` +
         `Time: ${booking.time || ""}\n` +
         `Address: ${booking.address || ""}\n` +
         `Issue: ${booking.issue || ""}\n\n` +
-        `If you need to change or cancel, please reply or call us.`,
+        `Someone from our office will follow up shortly.\n\n` +
+        `Thank you,\n${COMPANY_NAME}`,
       booking,
     }),
   }).catch((err) => {
-    app.log.error({ err }, "Email webhook failed");
+    app.log.error({ err, email: booking.email }, "Email webhook failed");
   });
 }
 
