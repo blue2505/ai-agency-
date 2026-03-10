@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+Wimport Fastify from "fastify";
 import cors from "@fastify/cors";
 import formbody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
@@ -215,11 +215,6 @@ function looksLikeThanks(text: string) {
 }
 
 function looksLikeBye(text: string) {
-  const t = normalizeText(text);
-  return ["bye", "goodbye", "that is all", "that's all", "hang up"].some((k) =>
-    t.includes(k)
-  );
-}
   const t = normalizeText(text);
   return ["bye", "goodbye", "that is all", "that's all", "hang up"].some((k) =>
     t.includes(k)
