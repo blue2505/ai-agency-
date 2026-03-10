@@ -18,6 +18,7 @@ app.register(formbody);
 app.register(fastifyStatic, {
   root: path.join(process.cwd(), "public"),
   prefix: "/",
+  decorateReply: false
 });
 
 const PORT = Number(process.env.PORT || 3000);
@@ -95,7 +96,7 @@ const sessions = new Map<string, Session>();
 const bookings = new Map<string, BookingRecord>();
 
 function ensureAudioDir() {
-  const dir = path.join(process.cwd(), "public", "audio");
+  const dir = path.join(process.cwd(), "public/audio");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
