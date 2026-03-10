@@ -949,6 +949,7 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
   return reply.send(twiml.toString());
   });
 
+
 app.post("/voice-intake", async (req: any, reply: any) => {
   console.log("VOICE BODY:", req.body);
 
@@ -986,6 +987,16 @@ app.post("/voice-intake", async (req: any, reply: any) => {
 
     session.noSpeechCount = 0;
 
+    if (looksLikeThanks(speech)) {
+      await speak(
+        twiml,
+        `You're welcome. Thank you for calling ${COMPANY_NAME}. Have a great day.`
+      );
+      twiml.hangup();
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
     if (looksLikeBye(speech)) {
       await speak(twiml, `Thank you for calling ${COMPANY_NAME}. Have a great day.`);
       twiml.hangup();
@@ -1017,8 +1028,6 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
-
-    if (looksLikeRescheduleIntent(speech)) {
 
     if (looksLikeRescheduleIntent(speech)) {
       const latest = findLatestBookingByPhone(session.callerPhone);
@@ -1075,22 +1084,6 @@ app.post("/voice-intake", async (req: any, reply: any) => {
     }
 
     if (session.stage === "book_name") {
-      if (
-        looksLikePricingQuestion(speech) ||
-        looksLikeHoursQuestion(speech) ||
-        looksLikeServiceAreaQuestion(speech) ||
-        looksLikeAvailabilityQuestion(speech) ||
-        getSimpleFaqReply(speech)
-      ) {
-        const sideReply = await answerQuestionDuringBooking(speech);
-        await addPromptAndGather(
-          twiml,
-          `${sideReply} When you're ready, what name should I put the appointment under?`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
       if (!looksLikeName(speech)) {
         await addPromptAndGather(
           twiml,
@@ -1111,95 +1104,42 @@ app.post("/voice-intake", async (req: any, reply: any) => {
     }
 
     if (session.stage === "book_issue") {
-      if (
-        looksLikePricingQuestion(speech) ||
-        looksLikeHoursQuestion(speech) ||
-        looksLikeServiceAreaQuestion(speech) ||
-        looksLikeAvailabilityQuestion(speech) ||
-        getSimpleFaqReply(speech)
-      ) {
-        const sideReply = await answerQuestionDuringBooking(speech);
-        await addPromptAndGather(
-          twiml,
-          `${sideReply} Also, what issue are you having with the system today?`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      if (!speech || speech.length < 3) {
-        await addPromptAndGather(
-          twiml,
-          "Could you briefly tell me what is going on with the system?"
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
       session.booking.issue = speech;
       session.stage = "book_time";
-      await addPromptAndGather(twiml, "Got it. What day and time works best for you?");
+      await addPromptAndGather(
+        twiml,
+        "What day and time would you like for the appointment?"
+      );
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
 
-if (session.stage === "book_time") {
-  const normalizedSpeech = normalizeText(speech);
-
-  if (
-    looksLikeTime(speech) ||
-    normalizedSpeech.includes("today") ||
-    normalizedSpeech.includes("tomorrow")
-  ) {
-    session.booking.time = cleanTimeForConfirmation(speech);
-    session.stage = "book_address";
-
-    await addPromptAndGather(
-      twiml,
-      "Thank you. What is the service address?"
-    );
-    reply.type("text/xml");
-    return reply.send(twiml.toString());
-  }
-
-  if (
-    looksLikePricingQuestion(speech) ||
-    looksLikeHoursQuestion(speech) ||
-    looksLikeServiceAreaQuestion(speech) ||
-    getSimpleFaqReply(speech)
-  ) {
-    const sideReply = await answerQuestionDuringBooking(speech);
-    await addPromptAndGather(
-      twiml,
-      `${sideReply} What day and time would you like for the appointment?`
-    );
-    reply.type("text/xml");
-    return reply.send(twiml.toString());
-  }
-
-  await addPromptAndGather(
-    twiml,
-    "What day and approximate time would you prefer for the appointment?"
-  );
-  reply.type("text/xml");
-  return reply.send(twiml.toString());
-}
+    if (session.stage === "book_time") {
+      session.booking.time = speech;
+      session.stage = "book_address";
+      await addPromptAndGather(
+        twiml,
+        "What is the full service address including street name, city, and zip code?"
+      );
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
 
     if (session.stage === "book_address") {
       if (!looksLikeAddress(speech)) {
         await addPromptAndGather(
           twiml,
-          "Please give me the full service address, including the street number."
+          "Please give me the full service address including street name, city, and zip code."
         );
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
 
-      session.booking.address = speech;
+      session.booking.address = speech.trim();
       session.stage = "book_email_optional";
       await addPromptAndGather(
         twiml,
-        "If you'd like an email confirmation too, please say the email slowly, or say skip."
+        "If you'd like an email confirmation too, please say your email slowly, for example anna at gmail dot com, or say skip."
       );
       reply.type("text/xml");
       return reply.send(twiml.toString());
@@ -1210,26 +1150,27 @@ if (session.stage === "book_time") {
         session.stage = "book_confirm";
         await addPromptAndGather(
           twiml,
-          `Perfect. I have ${session.booking.name} for ${session.booking.time} at ${session.booking.address}. Please say confirm, change, or cancel.`
+          "Please say confirm to finalize, change to edit it, or cancel to cancel it."
         );
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
 
-      if (!looksLikeEmail(speech)) {
+      const possibleEmail = spokenEmailToText(speech);
+      if (!looksLikeEmail(possibleEmail)) {
         await addPromptAndGather(
           twiml,
-          "I didn't catch a valid email. Please say the email again, or say skip."
+          "I didn't catch a valid email. Please say it again slowly, for example anna at gmail dot com, or say skip."
         );
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
 
-      session.booking.email = spokenEmailToText(speech);
+      session.booking.email = possibleEmail;
       session.stage = "book_confirm";
       await addPromptAndGather(
         twiml,
-        `Perfect. I have ${session.booking.name} for ${session.booking.time} at ${session.booking.address}. Please say confirm, change, or cancel.`
+        "Please say confirm to finalize, change to edit it, or cancel to cancel it."
       );
       reply.type("text/xml");
       return reply.send(twiml.toString());
@@ -1263,9 +1204,9 @@ if (session.stage === "book_time") {
         session.booking.status = "confirmed";
         bookings.set(session.booking.id, { ...session.booking });
 
-      await createCalendarBooking(session.booking).catch((err) => {
-      app.log.error({ err }, "Calendar booking failed");
-      });
+        await createCalendarBooking(session.booking).catch((err) => {
+          app.log.error({ err }, "Calendar booking failed");
+        });
 
         await maybeSendSmsConfirmation(session.booking).catch((err) => {
           app.log.error({ err }, "SMS confirmation failed");
@@ -1289,6 +1230,7 @@ if (session.stage === "book_time") {
 
         reply.type("text/xml");
         return reply.send(twiml.toString());
+      }
 
       await addPromptAndGather(
         twiml,
@@ -1299,16 +1241,7 @@ if (session.stage === "book_time") {
     }
 
     if (session.stage === "reschedule_new_time") {
-      if (!looksLikeTime(speech)) {
-        await addPromptAndGather(
-          twiml,
-          "What new day and approximate time would you prefer?"
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      session.booking.time = cleanTimeForConfirmation(speech);
+      session.booking.time = speech;
       session.booking.status = "reschedule_requested";
       bookings.set(session.booking.id, { ...session.booking });
 
@@ -1325,34 +1258,29 @@ if (session.stage === "book_time") {
       return reply.send(twiml.toString());
     }
 
-if (looksLikeBookingIntent(speech)) {
-  resetBookingDraft(session);
-  session.stage = "offer_booking";
-  await addPromptAndGather(
-    twiml,
-    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
-  );
-  reply.type("text/xml");
-  return reply.send(twiml.toString());
-}
+    if (looksLikeBookingIntent(speech)) {
+      resetBookingDraft(session);
+      session.stage = "offer_booking";
+      await addPromptAndGather(
+        twiml,
+        `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
+      );
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
 
     if (looksLikePricingQuestion(speech)) {
       const specificPrice = getSpecificPriceReply(speech);
 
       if (specificPrice) {
-        await addPromptAndGather(
-          twiml,
-          `${specificPrice} If you'd like, I can help schedule that for you.`
-        );
+        await addPromptAndGather(twiml, specificPrice);
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
 
-      if (isBroadPricingQuestion(speech)) {
-        await addPromptAndGather(twiml, getBroadPricingReply());
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
+      await addPromptAndGather(twiml, getBroadPricingReply());
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
     }
 
     if (looksLikeHoursQuestion(speech)) {
@@ -1374,15 +1302,15 @@ if (looksLikeBookingIntent(speech)) {
       return reply.send(twiml.toString());
     }
 
-if (looksLikeUrgentRepair(speech)) {
-  session.stage = "offer_booking";
-  await addPromptAndGather(
-    twiml,
-    `I'm sorry you're dealing with that. We can definitely help. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
-  );
-  reply.type("text/xml");
-  return reply.send(twiml.toString());
-}
+    if (looksLikeUrgentRepair(speech)) {
+      session.stage = "offer_booking";
+      await addPromptAndGather(
+        twiml,
+        `I'm sorry you're dealing with that. We can definitely help. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
+      );
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
 
     const aiReply = await assistantReply(speech);
 
