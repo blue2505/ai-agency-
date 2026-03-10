@@ -1394,66 +1394,35 @@ await addPromptAndGather(
 reply.type("text/xml");
 return reply.send(twiml.toString());
 
-} catch (err) {
-  app.log.error({ err }, "voice-intake crashed");
+  } catch (err) {
+    app.log.error({ err }, "voice-intake crashed");
 
-  await addPromptAndGather(
-    twiml,
-    "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
-  );
+    await addPromptAndGather(
+      twiml,
+      "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
+    );
 
-  reply.type("text/xml");
-  return reply.send(twiml.toString());
-}
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  }
 });
 
 app.setErrorHandler((err, _req, reply) => {
   app.log.error({ err }, "Global error handler");
-
   try {
     const VR = twilio.twiml.VoiceResponse;
     const twiml = new VR();
-
-    const gather = twiml.gather({
-      input: "speech",
-      action: getAbsoluteUrl("/voice-intake"),
-      method: "POST",
-      speechTimeout: "auto",
-      timeout: 5,
-      language: "en-US",
-      enhanced: true,
-      speechModel: "phone_call"
-    });
-
-    gather.say(
-      { voice: "Polly.Joanna" },
-      "I'm sorry, something went wrong. How can I help you?"
-    );
-
+    twiml.say({ voice: "Polly.Joanna" }, "I'm sorry, please try again.");
+    twiml.redirect({ method: "POST" }, "/voice-webhook");
     reply.status(200).type("text/xml").send(twiml.toString());
   } catch {
-    reply
-      .status(200)
-      .type("text/xml")
-      .send("<Response><Say>Okay.</Say></Response>");
+    reply.status(200).type("text/xml").send("<Response><Say>Okay.</Say></Response>");
   }
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" })
-  .then(async () => {
+  .then(() => {
     console.log(`Server listening on ${PORT}`);
-
-    if (
-      ELEVENLABS_API_KEY &&
-      ELEVENLABS_VOICE_ID &&
-      BASE_URL.startsWith("https://")
-    ) {
-      try {
-        await warmCommonAudio();
-      } catch (err) {
-        app.log.error({ err }, "Warm audio failed");
-      }
-    }
   })
   .catch((err) => {
     console.error(err);
