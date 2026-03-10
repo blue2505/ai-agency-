@@ -566,8 +566,8 @@ async function addPromptAndGather(
     input: "speech",
     action: getAbsoluteUrl(action),
     method: "POST",
-    speechTimeout: "auto",
-    timeout: 4,
+    speechTimeout: 1,
+    timeout: 2,
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
@@ -737,7 +737,26 @@ async function answerQuestionDuringBooking(text: string) {
 }
 
 async function warmCommonAudio() {
-  return;
+  const phrases = [
+    `Hello, this is ${COMPANY_NAME}, how can I help you?`,
+    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`,
+    "Perfect. What name should I put the appointment under?",
+    "Thank you. What issue are you having with the system today?",
+    "Got it. What day and time works best for you?",
+    "Thank you. What is the service address?",
+    "If you'd like an email confirmation too, you can say the email now, or say skip.",
+    "Perfect. Please say confirm to finalize the appointment.",
+    "No problem at all. What else can I help you with today?",
+    `Thank you for calling ${COMPANY_NAME}. Have a great day.`
+  ];
+
+  await Promise.all(
+    phrases.map((text) =>
+      elevenLabsTTS(text).catch((err) => {
+        app.log.error({ err, text }, "Warmup phrase failed");
+      })
+    )
+  );
 }
 
 app.get("/health", async () => ({ ok: true }));
@@ -951,46 +970,46 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       return reply.send(twiml.toString());
     }
 
-    if (session.stage === "book_time") {
-      if (
-        looksLikePricingQuestion(speech) ||
-        looksLikeHoursQuestion(speech) ||
-        looksLikeServiceAreaQuestion(speech) ||
-        looksLikeAvailabilityQuestion(speech) ||
-        getSimpleFaqReply(speech)
-      ) {
-        const sideReply = await answerQuestionDuringBooking(speech);
-        await addPromptAndGather(
-          twiml,
-          `${sideReply} What day and time would you like for the appointment?`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
+if (session.stage === "book_time") {
+  const normalizedSpeech = normalizeText(speech);
 
-const normalizedSpeech = normalizeText(speech);
+  if (
+    looksLikeTime(speech) ||
+    normalizedSpeech.includes("today") ||
+    normalizedSpeech.includes("tomorrow")
+  ) {
+    session.booking.time = cleanTimeForConfirmation(speech);
+    session.stage = "book_address";
 
-if (
-  !looksLikeTime(speech) &&
-  !normalizedSpeech.includes("today") &&
-  !normalizedSpeech.includes("tomorrow")
-) {
+    await addPromptAndGather(
+      twiml,
+      "Thank you. What is the service address?"
+    );
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  }
+
+  if (
+    looksLikePricingQuestion(speech) ||
+    looksLikeHoursQuestion(speech) ||
+    looksLikeServiceAreaQuestion(speech) ||
+    getSimpleFaqReply(speech)
+  ) {
+    const sideReply = await answerQuestionDuringBooking(speech);
+    await addPromptAndGather(
+      twiml,
+      `${sideReply} What day and time would you like for the appointment?`
+    );
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  }
+
   await addPromptAndGather(
     twiml,
     "What day and approximate time would you prefer for the appointment?"
   );
   reply.type("text/xml");
   return reply.send(twiml.toString());
-}
-
-session.booking.time = cleanTimeForConfirmation(speech);
-session.stage = "book_address";
-await addPromptAndGather(
-  twiml,
-  "Thank you. What is the service address?"
-);
-reply.type("text/xml");
-return reply.send(twiml.toString());
 }
 
     if (session.stage === "book_address") {
@@ -1127,16 +1146,16 @@ return reply.send(twiml.toString());
       return reply.send(twiml.toString());
     }
 
-    if (looksLikeBookingIntent(speech)) {
-      resetBookingDraft(session);
-      session.stage = "book_name";
-      await addPromptAndGather(
-        twiml,
-        "Absolutely. I can help with that. What name should I put the appointment under?"
-      );
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
+if (looksLikeBookingIntent(speech)) {
+  resetBookingDraft(session);
+  session.stage = "offer_booking";
+  await addPromptAndGather(
+    twiml,
+    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
+  );
+  reply.type("text/xml");
+  return reply.send(twiml.toString());
+}
 
     if (looksLikePricingQuestion(speech)) {
       const specificPrice = getSpecificPriceReply(speech);
@@ -1176,15 +1195,15 @@ return reply.send(twiml.toString());
       return reply.send(twiml.toString());
     }
 
-    if (looksLikeUrgentRepair(speech)) {
-      session.stage = "offer_booking";
-      await addPromptAndGather(
-        twiml,
-        "I'm sorry you're dealing with that. We can definitely help with that. Would you like me to get you scheduled?"
-      );
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
+if (looksLikeUrgentRepair(speech)) {
+  session.stage = "offer_booking";
+  await addPromptAndGather(
+    twiml,
+    `I'm sorry you're dealing with that. We can definitely help. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
+  );
+  reply.type("text/xml");
+  return reply.send(twiml.toString());
+}
 
     const aiReply = await assistantReply(speech);
     await addPromptAndGather(twiml, aiReply);
