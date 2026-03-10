@@ -570,16 +570,6 @@ async function elevenLabsTTS(text: string): Promise<string> {
 }
 
 async function speak(twiml: any, text: string) {
-  try {
-    const audioPath = await elevenLabsTTS(text);
-    if (BASE_URL.startsWith("https://")) {
-      twiml.play(`${BASE_URL}${audioPath}`);
-      return;
-    }
-  } catch (e) {
-    app.log.error({ err: e }, "ElevenLabs failed; falling back to Polly");
-  }
-
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
@@ -588,6 +578,25 @@ async function addPromptAndGather(
   text: string,
   action = "/voice-intake"
 ) {
+  const actionUrl = BASE_URL.startsWith("https://")
+    ? `${BASE_URL}${action}`
+    : action;
+
+  const gather = twiml.gather({
+    input: "speech",
+    action: actionUrl,
+    method: "POST",
+    speechTimeout: "auto",
+    timeout: 4,
+    actionOnEmptyResult: true,
+    language: "en-US",
+    enhanced: true,
+    speechModel: "phone_call",
+  });
+
+  gather.say({ voice: "Polly.Joanna" }, text);
+}
+
   const actionUrl = BASE_URL.startsWith("https://")
     ? `${BASE_URL}${action}`
     : action;
@@ -778,24 +787,7 @@ async function answerQuestionDuringBooking(text: string) {
 }
 
 async function warmCommonAudio() {
-  const phrases = [
-    `Hello, this is ${COMPANY_NAME}, how can I help you?`,
-    "Perfect. What name should I put the appointment under?",
-    "Thank you. What issue are you having with the system today?",
-    "Got it. What day and time works best for you?",
-    "Thank you. What is the service address?",
-    "Please say the email again, or say skip.",
-    "No problem at all. What else can I help you with today?",
-    `Thank you for calling ${COMPANY_NAME}. Have a great day.`,
-  ];
-
-  await Promise.all(
-    phrases.map((text) =>
-      elevenLabsTTS(text).catch((err) => {
-        app.log.error({ err, text }, "Warmup phrase failed");
-      })
-    )
-  );
+  return;
 }
 
 app.get("/health", async () => ({ ok: true }));
