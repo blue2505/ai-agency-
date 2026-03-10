@@ -947,7 +947,7 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
 
   reply.type("text/xml");
   return reply.send(twiml.toString());
-});
+  });
 
 app.post("/voice-intake", async (req: any, reply: any) => {
   console.log("VOICE BODY:", req.body);
