@@ -596,7 +596,7 @@ async function elevenLabsTTS(text: string): Promise<string> {
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_turbo_v2_5",
+        model_id: "eleven_turbo_v2",
         voice_settings: {
           stability: 0.42,
           similarity_boost: 0.9,
@@ -711,11 +711,27 @@ Guidelines:
 }
 
 async function createCalendarBooking(booking: BookingRecord) {
+  app.log.info(
+    {
+      hasCalendar: !!calendar,
+      calendarId: GOOGLE_CALENDAR_ID,
+      bookingTime: booking.time,
+      bookingName: booking.name,
+      bookingAddress: booking.address,
+    },
+    "createCalendarBooking called"
+  );
+
   if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) return null;
 
   const start = chrono.parseDate(booking.time, new Date(), {
     forwardDate: true,
   });
+
+  app.log.info(
+    { parsedStart: start ? start.toISOString() : null },
+    "parsed calendar start"
+  );
 
   if (!start) return null;
 
@@ -740,6 +756,16 @@ Email: ${booking.email || ""}`,
       },
     },
   });
+
+  app.log.info(
+    {
+      eventId: event.data.id,
+      htmlLink: event.data.htmlLink,
+      start: event.data.start,
+      end: event.data.end,
+    },
+    "calendar event created"
+  );
 
   return event.data;
 }
@@ -848,18 +874,18 @@ async function answerQuestionDuringBooking(text: string) {
 }
 
 async function warmCommonAudio() {
-  const phrases = [
-    `Hello, this is ${COMPANY_NAME}, how can I help you?`,
-    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`,
-    "Perfect. What name should I put the appointment under?",
-    "Thank you. What issue are you having with the system today?",
-    "Got it. What day and time works best for you?",
-    "Thank you. What is the full service address including street name, city, and zip code?",
-    "If you'd like an email confirmation too, you can say the email now, or say skip.",
-    "Perfect. Please say confirm to finalize the appointment.",
-    "No problem at all. What else can I help you with today?",
-    `Thank you for calling ${COMPANY_NAME}. Have a great day.`
-  ];
+const phrases = [
+  `Hello, this is ${COMPANY_NAME}, how can I help you?`,
+  `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`,
+  "Perfect. What name should I put the appointment under?",
+  "Thank you. What issue are you having with the system today?",
+  "What day and time would you like for the appointment?",
+  "What is the full service address including street name, city, and zip code?",
+  "If you'd like an email confirmation too, please say your email slowly, for example anna at gmail dot com, or say skip.",
+  "Please say confirm to finalize, change to edit it, or cancel to cancel it.",
+  "No problem at all. What else can I help you with today?",
+  "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly."
+];
 
   await Promise.all(
     phrases.map((text) =>
@@ -1220,7 +1246,7 @@ if (session.stage === "book_time") {
         session.stage = "normal";
         await addPromptAndGather(
           twiml,
-          `You're all set. I have ${session.booking.name} scheduled for ${session.booking.time} at ${session.booking.address}. Someone from ${COMPANY_NAME} will follow up shortly. What else can I help you with today?`
+        "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly."
         );
         reply.type("text/xml");
         return reply.send(twiml.toString());
