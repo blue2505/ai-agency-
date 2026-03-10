@@ -984,14 +984,6 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       return reply.send(twiml.toString());
     }
 
-      await addPromptAndGather(
-        twiml,
-        "I'm sorry, I didn't catch that. Could you say that one more time?"
-      );
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
     session.noSpeechCount = 0;
 
     if (looksLikeBye(speech)) {
