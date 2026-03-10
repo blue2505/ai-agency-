@@ -741,20 +741,6 @@ async function addPromptAndGather(
   gather.say({ voice: "Polly.Joanna" }, text);
 }
 
-  try {
-    const audioPath = await elevenLabsTTS(text);
-
-    if (BASE_URL.startsWith("https://")) {
-      gather.play(`${BASE_URL}${audioPath}`);
-      return;
-    }
-  } catch (e) {
-    app.log.error({ err: e }, "ElevenLabs gather audio failed");
-  }
-
-  gather.say({ voice: "Polly.Joanna" }, text);
-}
-
 async function assistantReply(userText: string) {
   if (!openai) {
     return "I can help with scheduling, pricing, service areas, hours, and general HVAC questions. What can I help you with today?";
