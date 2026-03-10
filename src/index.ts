@@ -712,12 +712,18 @@ Guidelines:
 - If appropriate, offer to schedule service
 - If unsure, ask one short clarifying question
 - Never awkwardly repeat the caller's exact sentence back to them
+- Keep replies to one short sentence when possible.
+- Use two short sentences max unless necessary.
+- Sound warm and human, like a real receptionist.
+- Do not repeat the caller's exact words back to them.
+- If the caller is clearly asking to book, move them forward quickly.
+- If the caller says thank you after booking, respond warmly and end the call.
 `;
 
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    temperature: 0.35,
-    max_tokens: 140,
+    temperature: 0.25,
+    max_tokens: 80,
     messages: [
       { role: "system", content: system },
       { role: "user", content: userText },
@@ -738,6 +744,7 @@ async function createCalendarBooking(booking: BookingRecord) {
       bookingTime: booking.time,
       bookingName: booking.name,
       bookingAddress: booking.address,
+      timezone: TIMEZONE,
     },
     "createCalendarBooking called"
   );
@@ -770,37 +777,42 @@ async function createCalendarBooking(booking: BookingRecord) {
 
   const end = new Date(start.getTime() + APPOINTMENT_DURATION_MINUTES * 60000);
 
-  const event = await calendar.events.insert({
-    calendarId: GOOGLE_CALENDAR_ID,
-    requestBody: {
-      summary: `${COMPANY_NAME} Service Appointment`,
-      description: `Customer: ${booking.name || ""}
+  try {
+    const event = await calendar.events.insert({
+      calendarId: GOOGLE_CALENDAR_ID,
+      requestBody: {
+        summary: `${COMPANY_NAME} Service Appointment`,
+        description: `Customer: ${booking.name || ""}
 Issue: ${booking.issue || ""}
 Phone: ${booking.callerPhone || ""}
 Email: ${booking.email || ""}`,
-      location: booking.address || "",
-      start: {
-        dateTime: start.toISOString(),
-        timeZone: TIMEZONE,
+        location: booking.address || "",
+        start: {
+          dateTime: start.toISOString(),
+          timeZone: TIMEZONE,
+        },
+        end: {
+          dateTime: end.toISOString(),
+          timeZone: TIMEZONE,
+        },
       },
-      end: {
-        dateTime: end.toISOString(),
-        timeZone: TIMEZONE,
+    });
+
+    app.log.info(
+      {
+        eventId: event.data.id,
+        htmlLink: event.data.htmlLink,
+        start: event.data.start,
+        end: event.data.end,
       },
-    },
-  });
+      "calendar event created"
+    );
 
-  app.log.info(
-    {
-      eventId: event.data.id,
-      htmlLink: event.data.htmlLink,
-      start: event.data.start,
-      end: event.data.end,
-    },
-    "calendar event created"
-  );
-
-  return event.data;
+    return event.data;
+  } catch (err) {
+    app.log.error({ err }, "Calendar booking failed inside createCalendarBooking");
+    return null;
+  }
 }
 
 async function maybeSendSmsConfirmation(booking: BookingRecord) {
@@ -821,27 +833,40 @@ async function maybeSendSmsConfirmation(booking: BookingRecord) {
 }
 
 async function maybeSendEmailConfirmation(booking: BookingRecord) {
-  if (!EMAIL_WEBHOOK_URL || !booking.email) return;
+  if (!resend || !booking.email) {
+    app.log.info(
+      {
+        hasResend: !!resend,
+        bookingEmail: booking.email || null,
+      },
+      "Skipping email confirmation"
+    );
+    return;
+  }
 
-  await fetch(EMAIL_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  try {
+    const result = await resend.emails.send({
+      from: EMAIL_FROM,
       to: booking.email,
       subject: `${COMPANY_NAME} Appointment Confirmation`,
-      message:
-        `Hello ${booking.name || ""},\n\n` +
-        `Your appointment request has been scheduled.\n\n` +
-        `Time: ${booking.time || ""}\n` +
-        `Address: ${booking.address || ""}\n` +
-        `Issue: ${booking.issue || ""}\n\n` +
-        `Someone from our office will follow up shortly.\n\n` +
-        `Thank you,\n${COMPANY_NAME}`,
-      booking,
-    }),
-  }).catch((err) => {
-    app.log.error({ err, email: booking.email }, "Email webhook failed");
-  });
+      text: `Hello ${booking.name || ""},
+
+Your appointment request has been scheduled.
+
+Time: ${booking.time || ""}
+Address: ${booking.address || ""}
+Issue: ${booking.issue || ""}
+
+Someone from our office will follow up shortly.
+
+Thank you,
+${COMPANY_NAME}`,
+    });
+
+    app.log.info({ result, to: booking.email }, "Email confirmation sent");
+  } catch (err) {
+    app.log.error({ err, to: booking.email }, "Email send failed");
+  }
 }
 
 async function createHubSpotContact(booking: BookingRecord) {
