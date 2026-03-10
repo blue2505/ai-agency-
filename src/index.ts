@@ -694,6 +694,21 @@ Email: ${booking.email}`,
   return event.data;
 }
 
+function shouldUsePremiumVoice(text: string) {
+  const normalized = text.trim().toLowerCase();
+
+  const cheapPrompts = [
+    "perfect. what name should i put the appointment under?",
+    "thank you. what issue are you having with the system today?",
+    "got it. what day and time works best for you?",
+    "thank you. what is the full service address including street name, city, and zip code?",
+    "please say confirm to finalize, change to edit it, or cancel to cancel it.",
+    "no problem at all. what else can i help you with today?"
+  ];
+
+  return !cheapPrompts.includes(normalized);
+}
+
 async function addPromptAndGather(
   twiml: any,
   text: string,
@@ -711,6 +726,11 @@ async function addPromptAndGather(
     speechModel: "phone_call",
     profanityFilter: false,
   });
+
+  if (!shouldUsePremiumVoice(text)) {
+    gather.say({ voice: "Polly.Joanna" }, text);
+    return;
+  }
 
   try {
     const audioPath = await elevenLabsTTS(text);
@@ -880,16 +900,10 @@ async function answerQuestionDuringBooking(text: string) {
 
 async function warmCommonAudio() {
   const phrases = [
-    `Hello, this is ${COMPANY_NAME}, how can I help you?`,
-    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`,
-    "Perfect. What name should I put the appointment under?",
-    "Thank you. What issue are you having with the system today?",
-    "Got it. What day and time works best for you?",
-    "Thank you. What is the service address?",
-    "If you'd like an email confirmation too, you can say the email now, or say skip.",
-    "Perfect. Please say confirm to finalize the appointment.",
-    "No problem at all. What else can I help you with today?",
-    `Thank you for calling ${COMPANY_NAME}. Have a great day.`
+    `You're all set. I have your appointment scheduled.`,
+    `I'm sorry you're dealing with that. We can definitely help.`,
+    `We are open ${HOURS}.`,
+    `We service ${SERVICE_AREAS}.`
   ];
 
   await Promise.all(
@@ -911,8 +925,21 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
   const callerPhone = (req.body?.From || "").toString().trim();
   getSession(callSid, callerPhone);
 
-  await addPromptAndGather(
-    twiml,
+  const gather = twiml.gather({
+    input: "speech",
+    action: getAbsoluteUrl("/voice-intake"),
+    method: "POST",
+    speechTimeout: "auto",
+    timeout: 5,
+    actionOnEmptyResult: true,
+    language: "en-US",
+    enhanced: true,
+    speechModel: "phone_call",
+    profanityFilter: false,
+  });
+
+  gather.say(
+    { voice: "Polly.Joanna" },
     `Hello, this is ${COMPANY_NAME}, how can I help you?`
   );
 
@@ -1253,7 +1280,7 @@ if (session.stage === "book_time") {
 
         await addPromptAndGather(
           twiml,
-          `You're all set. I have ${session.booking.name} scheduled for ${session.booking.time} at ${session.booking.address}.`
+"You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly with the details."
         );
 
         reply.type("text/xml");
