@@ -244,8 +244,47 @@ function looksLikeAddress(text: string) {
   return t.length >= 6 && /\d/.test(t);
 }
 
+function spokenEmailToText(input: string) {
+  let t = input.trim().toLowerCase();
+
+  const replacements: Array<[RegExp, string]> = [
+    [/\s+at\s+/g, "@"],
+    [/\s+dot\s+/g, "."],
+    [/\s+underscore\s+/g, "_"],
+    [/\s+dash\s+/g, "-"],
+    [/\s+hyphen\s+/g, "-"],
+    [/\s+plus\s+/g, "+"],
+    [/\s+period\s+/g, "."],
+    [/\s+/g, ""],
+  ];
+
+  for (const [pattern, value] of replacements) {
+    t = t.replace(pattern, value);
+  }
+
+  const wordToDigit: Record<string, string> = {
+    zero: "0",
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8",
+    nine: "9",
+  };
+
+  Object.entries(wordToDigit).forEach(([word, digit]) => {
+    t = t.replace(new RegExp(word, "g"), digit);
+  });
+
+  return t;
+}
+
 function looksLikeEmail(text: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
+  const normalized = spokenEmailToText(text);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
 }
 
 function looksLikeSkipEmail(text: string) {
@@ -1066,7 +1105,7 @@ if (session.stage === "book_time") {
         return reply.send(twiml.toString());
       }
 
-      session.booking.email = speech.trim();
+      session.booking.email = spokenEmailToText(speech);
       session.stage = "book_confirm";
       await addPromptAndGather(
         twiml,
