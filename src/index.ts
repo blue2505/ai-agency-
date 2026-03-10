@@ -637,12 +637,25 @@ async function speak(twiml: any, text: string) {
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
-async function createCalendarBooking(booking: any) {
+async function createCalendarBooking(booking: BookingRecord) {
+  app.log.info(
+    {
+      hasCalendar: !!calendar,
+      calendarId: GOOGLE_CALENDAR_ID,
+      bookingTime: booking.time,
+      bookingName: booking.name,
+      bookingAddress: booking.address,
+    },
+    "createCalendarBooking called"
+  );
+
   if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) return null;
 
   const start = chrono.parseDate(booking.time, new Date(), {
     forwardDate: true,
   });
+
+  app.log.info({ parsedStart: start?.toISOString?.() || null }, "parsed calendar start");
 
   if (!start) return null;
 
@@ -651,7 +664,7 @@ async function createCalendarBooking(booking: any) {
   const event = await calendar.events.insert({
     calendarId: GOOGLE_CALENDAR_ID,
     requestBody: {
-      summary: `${COMPANY_NAME} Appointment`,
+      summary: `${COMPANY_NAME} Service Appointment`,
       description: `Customer: ${booking.name}
 Issue: ${booking.issue}
 Phone: ${booking.callerPhone}
@@ -667,6 +680,16 @@ Email: ${booking.email}`,
       },
     },
   });
+
+  app.log.info(
+    {
+      eventId: event.data.id,
+      htmlLink: event.data.htmlLink,
+      start: event.data.start,
+      end: event.data.end,
+    },
+    "calendar event created"
+  );
 
   return event.data;
 }
