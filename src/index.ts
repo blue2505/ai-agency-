@@ -8,6 +8,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import OpenAI from "openai";
+import { google } from "googleapis";
+import chrono from "chrono-node";
 
 dotenv.config();
 
@@ -33,6 +35,20 @@ const SERVICE_AREAS = (
   process.env.SERVICE_AREAS || "Orlando and surrounding areas"
 ).trim();
 
+const GOOGLE_CLIENT_EMAIL = (process.env.GOOGLE_CLIENT_EMAIL || "").trim();
+
+const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || "")
+  .replace(/\\n/g, "\n")
+  .trim();
+
+const GOOGLE_CALENDAR_ID = (process.env.GOOGLE_CALENDAR_ID || "").trim();
+
+const TIMEZONE = (process.env.TIMEZONE || "America/New_York").trim();
+
+const APPOINTMENT_DURATION_MINUTES = Number(
+  process.env.APPOINTMENT_DURATION_MINUTES || 60
+);
+
 const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
 const ELEVENLABS_VOICE_ID = (process.env.ELEVENLABS_VOICE_ID || "").trim();
 
@@ -51,6 +67,18 @@ const smsClient =
   TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
     ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     : null;
+
+const googleAuth =
+  GOOGLE_CLIENT_EMAIL && GOOGLE_PRIVATE_KEY
+    ? new google.auth.JWT({
+        email: GOOGLE_CLIENT_EMAIL,
+        key: GOOGLE_PRIVATE_KEY,
+        scopes: ["https://www.googleapis.com/auth/calendar"],
+      })
+    : null;
+
+const calendar =
+  googleAuth ? google.calendar({ version: "v3", auth: googleAuth }) : null;
 
 type BookingStatus =
   | "pending"
@@ -609,6 +637,40 @@ async function speak(twiml: any, text: string) {
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
+async function createCalendarBooking(booking: any) {
+  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) return null;
+
+  const start = chrono.parseDate(booking.time, new Date(), {
+    forwardDate: true,
+  });
+
+  if (!start) return null;
+
+  const end = new Date(start.getTime() + APPOINTMENT_DURATION_MINUTES * 60000);
+
+  const event = await calendar.events.insert({
+    calendarId: GOOGLE_CALENDAR_ID,
+    requestBody: {
+      summary: `${COMPANY_NAME} Appointment`,
+      description: `Customer: ${booking.name}
+Issue: ${booking.issue}
+Phone: ${booking.callerPhone}
+Email: ${booking.email}`,
+      location: booking.address,
+      start: {
+        dateTime: start.toISOString(),
+        timeZone: TIMEZONE,
+      },
+      end: {
+        dateTime: end.toISOString(),
+        timeZone: TIMEZONE,
+      },
+    },
+  });
+
+  return event.data;
+}
+
 async function addPromptAndGather(
   twiml: any,
   text: string,
@@ -1141,7 +1203,12 @@ if (session.stage === "book_time") {
 
       if (t.includes("confirm") || looksLikeYes(speech)) {
         session.booking.status = "confirmed";
+
         bookings.set(session.booking.id, { ...session.booking });
+
+        await createCalendarBooking(session.booking).catch((err) => {
+          app.log.error({ err }, "Calendar booking failed");
+        });
 
         await maybeSendSmsConfirmation(session.booking).catch((err) => {
           app.log.error({ err }, "SMS confirmation failed");
@@ -1156,10 +1223,12 @@ if (session.stage === "book_time") {
         });
 
         session.stage = "normal";
+
         await addPromptAndGather(
           twiml,
-          `You're all set. I have ${session.booking.name} scheduled for ${session.booking.time} at ${session.booking.address}. Someone from ${COMPANY_NAME} will follow up shortly. What else can I help you with today?`
+          `You're all set. I have ${session.booking.name} scheduled for ${session.booking.time} at ${session.booking.address}.`
         );
+
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
