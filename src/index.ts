@@ -984,6 +984,14 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       return reply.send(twiml.toString());
     }
 
+      await addPromptAndGather(
+        twiml,
+        "I'm sorry, I didn't catch that. Could you say that one more time?"
+      );
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
     session.noSpeechCount = 0;
 
     if (looksLikeBye(speech)) {
@@ -1017,6 +1025,8 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
+
+    if (looksLikeRescheduleIntent(speech)) {
 
     if (looksLikeRescheduleIntent(speech)) {
       const latest = findLatestBookingByPhone(session.callerPhone);
@@ -1278,13 +1288,15 @@ if (session.stage === "book_time") {
         });
 
         session.stage = "normal";
-        await addPromptAndGather(
+
+        await speak(
           twiml,
-        "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly."
+          "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly. Thank you for calling. Have a great day."
         );
+        twiml.hangup();
+
         reply.type("text/xml");
         return reply.send(twiml.toString());
-      }
 
       await addPromptAndGather(
         twiml,
