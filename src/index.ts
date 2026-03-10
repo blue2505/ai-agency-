@@ -33,6 +33,9 @@ const SERVICE_AREAS = (
   process.env.SERVICE_AREAS || "Orlando and surrounding areas"
 ).trim();
 
+const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_VOICE_ID = (process.env.ELEVENLABS_VOICE_ID || "").trim();
+
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const OPENAI_MODEL = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
 
