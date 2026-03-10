@@ -755,6 +755,10 @@ Guidelines:
 - Never awkwardly repeat the caller's exact sentence back to them
 `;
 
+if (!openai) {
+  return "Sorry about that. Could you repeat that?";
+}
+
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
     temperature: 0.35,
