@@ -487,7 +487,73 @@ function findLatestBookingByPhone(phone?: string) {
   return all[0];
 }
 
+function ensureAudioDir() {
+  const dir = path.join(process.cwd(), "public", "audio");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function cacheInfo(text: string) {
+  const hash = crypto.createHash("sha1").update(text).digest("hex");
+  const file = `tts_${hash}.mp3`;
+  return {
+    abs: path.join(ensureAudioDir(), file),
+    rel: `/audio/${file}`,
+  };
+}
+
+async function elevenLabsTTS(text: string): Promise<string> {
+  const cache = cacheInfo(text);
+
+  if (fs.existsSync(cache.abs)) {
+    return cache.rel;
+  }
+
+  const resp = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${process.env.ELEVENLABS_VOICE_ID}`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": process.env.ELEVENLABS_API_KEY!,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: "eleven_turbo_v2_5",
+        voice_settings: {
+          stability: 0.42,
+          similarity_boost: 0.9,
+          style: 0.1,
+          use_speaker_boost: true,
+        },
+      }),
+    }
+  );
+
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`ElevenLabs error ${resp.status}: ${msg}`);
+  }
+
+  const buf = Buffer.from(await resp.arrayBuffer());
+  fs.writeFileSync(cache.abs, buf);
+
+  return cache.rel;
+}
+
 async function speak(twiml: any, text: string) {
+  try {
+    const audioPath = await elevenLabsTTS(text);
+
+    if (BASE_URL.startsWith("https://")) {
+      twiml.play(`${BASE_URL}${audioPath}`);
+      return;
+    }
+  } catch (e) {
+    app.log.error({ err: e }, "ElevenLabs failed; falling back to Polly");
+  }
+
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
@@ -507,6 +573,17 @@ async function addPromptAndGather(
     enhanced: true,
     speechModel: "phone_call",
   });
+
+  try {
+    const audioPath = await elevenLabsTTS(text);
+
+    if (BASE_URL.startsWith("https://")) {
+      gather.play(`${BASE_URL}${audioPath}`);
+      return;
+    }
+  } catch (e) {
+    app.log.error({ err: e }, "ElevenLabs gather audio failed");
+  }
 
   gather.say({ voice: "Polly.Joanna" }, text);
 }
@@ -891,21 +968,30 @@ app.post("/voice-intake", async (req: any, reply: any) => {
         return reply.send(twiml.toString());
       }
 
-      if (!looksLikeTime(speech)) {
-        await addPromptAndGather(
-          twiml,
-          "What day and approximate time would you prefer for the appointment?"
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
+const normalizedSpeech = normalizeText(speech);
 
-      session.booking.time = cleanTimeForConfirmation(speech);
-      session.stage = "book_address";
-      await addPromptAndGather(twiml, "Thank you. What is the service address?");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
+if (
+  !looksLikeTime(speech) &&
+  !normalizedSpeech.includes("today") &&
+  !normalizedSpeech.includes("tomorrow")
+) {
+  await addPromptAndGather(
+    twiml,
+    "What day and approximate time would you prefer for the appointment?"
+  );
+  reply.type("text/xml");
+  return reply.send(twiml.toString());
+}
+
+session.booking.time = cleanTimeForConfirmation(speech);
+session.stage = "book_address";
+await addPromptAndGather(
+  twiml,
+  "Thank you. What is the service address?"
+);
+reply.type("text/xml");
+return reply.send(twiml.toString());
+}
 
     if (session.stage === "book_address") {
       if (!looksLikeAddress(speech)) {
