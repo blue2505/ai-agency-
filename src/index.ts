@@ -938,10 +938,10 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
     profanityFilter: false,
   });
 
-  gather.say(
-    { voice: "Polly.Joanna" },
-    `Hello, this is ${COMPANY_NAME}, how can I help you?`
-  );
+await addPromptAndGather(
+  twiml,
+  `Hello, this is ${COMPANY_NAME}, how can I help you?`
+);
 
   reply.type("text/xml");
   return reply.send(twiml.toString());
