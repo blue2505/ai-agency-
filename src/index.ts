@@ -512,7 +512,7 @@ if (
     session.booking.issue &&
     session.booking.address &&
     (session.booking.requestedTime || (session as any)._pendingDate)
-  )
+  ) {
     const pendingDate = (session as any)._pendingDate;
     if (pendingDate) {
       session.booking.confirmedStart = pendingDate;
