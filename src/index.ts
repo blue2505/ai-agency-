@@ -9,7 +9,7 @@ import path from "path";
 import crypto from "crypto";
 import OpenAI from "openai";
 import { google } from "googleapis";
-import chrono from "chrono-node";
+import * as chrono from "chrono-node";
 import { Resend } from "resend";
 
 dotenv.config();
@@ -323,12 +323,11 @@ function spokenEmailToText(input: string) {
     t = t.replace(new RegExp(word, "g"), digit);
   });
 
-  return t;
+  return t.replace(/[^a-z0-9@._+-]/g, "").trim();
 }
 
 function looksLikeEmail(text: string) {
-  const normalized = spokenEmailToText(text);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(text.trim());
 }
 
 function looksLikeSkipEmail(text: string) {
@@ -697,6 +696,19 @@ Company information:
 - Hours: ${HOURS}
 - Service areas: ${SERVICE_AREAS}
 - Diagnostic fee: ${DIAGNOSTIC_FEE}
+Services offered:
+- AC repair
+- Heating repair
+- HVAC diagnostics
+- Tune-ups and preventative maintenance
+- Thermostat installation
+- Drain line clearing
+- Capacitor replacement
+- Contactor replacement
+- Blower motor replacement
+- Refrigerant-related service after diagnosis
+- Full system replacement estimates
+- Inspections and installation-related requests
 
 Your tone:
 - Warm, calm, natural, polished, and human
@@ -706,18 +718,20 @@ Your tone:
 - Keep responses concise and easy to hear over the phone
 
 Guidelines:
-- If the caller asks a specific price, answer only that specific price
-- If the caller asks broad pricing, answer briefly and naturally
-- If the caller has a repair issue, sound empathetic and helpful
-- If appropriate, offer to schedule service
-- If unsure, ask one short clarifying question
-- Never awkwardly repeat the caller's exact sentence back to them
+- Answer the caller's actual question directly and naturally.
+- If the caller asks about services, explain the services clearly like a real office receptionist.
+- If the caller asks a specific price, answer only that price if known.
+- If the caller asks a broad pricing question, summarize briefly and naturally.
+- If the caller has a repair issue, sound empathetic and helpful.
+- If appropriate, offer to schedule service.
+- If unsure, ask one short clarifying question.
+- Never awkwardly repeat the caller's exact sentence back to them.
 - Keep replies to one short sentence when possible.
 - Use two short sentences max unless necessary.
 - Sound warm and human, like a real receptionist.
-- Do not repeat the caller's exact words back to them.
 - If the caller is clearly asking to book, move them forward quickly.
 - If the caller says thank you after booking, respond warmly and end the call.
+- If the caller asks what services you provide, answer with a clear summary of repair, maintenance, diagnostics, and installation-related services.
 `;
 
   const resp = await openai.chat.completions.create({
@@ -844,10 +858,17 @@ async function maybeSendEmailConfirmation(booking: BookingRecord) {
     return;
   }
 
+  const cleanedEmail = booking.email.trim().toLowerCase();
+
+  if (!looksLikeEmail(cleanedEmail)) {
+    app.log.error({ cleanedEmail }, "Email send skipped because email is invalid");
+    return;
+  }
+
   try {
     const result = await resend.emails.send({
       from: EMAIL_FROM,
-      to: booking.email,
+      to: [cleanedEmail],
       subject: `${COMPANY_NAME} Appointment Confirmation`,
       text: `Hello ${booking.name || ""},
 
@@ -863,9 +884,14 @@ Thank you,
 ${COMPANY_NAME}`,
     });
 
-    app.log.info({ result, to: booking.email }, "Email confirmation sent");
+    if ((result as any)?.error) {
+      app.log.error({ result, to: cleanedEmail }, "Email send failed");
+      return;
+    }
+
+    app.log.info({ result, to: cleanedEmail }, "Email confirmation sent");
   } catch (err) {
-    app.log.error({ err, to: booking.email }, "Email send failed");
+    app.log.error({ err, to: cleanedEmail }, "Email send failed");
   }
 }
 
@@ -1182,6 +1208,7 @@ app.post("/voice-intake", async (req: any, reply: any) => {
       }
 
       const possibleEmail = spokenEmailToText(speech);
+
       if (!looksLikeEmail(possibleEmail)) {
         await addPromptAndGather(
           twiml,
@@ -1191,11 +1218,59 @@ app.post("/voice-intake", async (req: any, reply: any) => {
         return reply.send(twiml.toString());
       }
 
-      session.booking.email = possibleEmail;
-      session.stage = "book_confirm";
+      session.pendingEmail = possibleEmail;
+      session.stage = "book_email_confirm";
+
       await addPromptAndGather(
         twiml,
-        "Please say confirm to finalize, change to edit it, or cancel to cancel it."
+        `I heard ${possibleEmail}. If that's correct, please say yes. If not, please say the email again, or say skip.`
+      );
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
+    if (session.stage === "book_email_confirm") {
+      if (looksLikeYes(speech) && session.pendingEmail) {
+        session.booking.email = session.pendingEmail;
+        session.pendingEmail = undefined;
+        session.stage = "book_confirm";
+
+        await addPromptAndGather(
+          twiml,
+          "Please say confirm to finalize, change to edit it, or cancel to cancel it."
+        );
+        reply.type("text/xml");
+        return reply.send(twiml.toString());
+      }
+
+      if (looksLikeSkipEmail(speech)) {
+        session.pendingEmail = undefined;
+        session.stage = "book_confirm";
+
+        await addPromptAndGather(
+          twiml,
+          "Please say confirm to finalize, change to edit it, or cancel to cancel it."
+        );
+        reply.type("text/xml");
+        return reply.send(twiml.toString());
+      }
+
+      const possibleEmail = spokenEmailToText(speech);
+
+      if (!looksLikeEmail(possibleEmail)) {
+        await addPromptAndGather(
+          twiml,
+          "I still didn't catch a valid email. Please say it again slowly, or say skip."
+        );
+        reply.type("text/xml");
+        return reply.send(twiml.toString());
+      }
+
+      session.pendingEmail = possibleEmail;
+
+      await addPromptAndGather(
+        twiml,
+        `I heard ${possibleEmail}. If that's correct, please say yes. If not, say it again, or say skip.`
       );
       reply.type("text/xml");
       return reply.send(twiml.toString());
@@ -1242,9 +1317,8 @@ app.post("/voice-intake", async (req: any, reply: any) => {
         });
 
         await createHubSpotContact(session.booking).catch((err) => {
-          app.log.error({ err }, "HubSpot contact creation failed");
+        app.log.info({ err }, "HubSpot contact already exists or could not be created");
         });
-
         session.stage = "normal";
 
         await speak(
