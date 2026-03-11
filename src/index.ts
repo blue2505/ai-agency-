@@ -303,7 +303,7 @@ async function elevenLabsTTS(text: string): Promise<string> {
     },
     body: JSON.stringify({
       text,
-      model_id: "eleven_turbo_v2",
+      model_id: "eleven_flash_v2_5",
       voice_settings: { stability: 0.45, similarity_boost: 0.88, style: 0.08, use_speaker_boost: true },
     }),
   });
@@ -506,12 +506,13 @@ async function handleTurn(session: Session, userSpeech: string): Promise<string>
   }
 
   // ── Booking confirmation ──
-  if (
-    isConfirm(userSpeech) &&
+if (
     !session.bookedAndDone &&
     session.booking.name &&
+    session.booking.issue &&
+    session.booking.address &&
     (session.booking.requestedTime || (session as any)._pendingDate)
-  ) {
+  )
     const pendingDate = (session as any)._pendingDate;
     if (pendingDate) {
       session.booking.confirmedStart = pendingDate;
