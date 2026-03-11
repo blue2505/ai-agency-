@@ -340,7 +340,7 @@ async function gatherWithPrompt(twiml: any, text: string) {
 // ─── System prompt ────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(): string {
-  return `You are Sarah, the live receptionist for ${COMPANY_NAME}, an HVAC company serving ${SERVICE_AREAS}.
+  return `You are Ed, the live receptionist for ${COMPANY_NAME}, an HVAC company serving ${SERVICE_AREAS}.
 
 Your personality:
 - Warm, friendly, calm, and completely natural — like a real person on the phone
@@ -574,7 +574,7 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
   const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
   getSession(callSid, callerPhone);
-  await gatherWithPrompt(twiml, `Thank you for calling ${COMPANY_NAME}. This is Sarah, how can I help you today?`);
+  await gatherWithPrompt(twiml, `Thank you for calling ${COMPANY_NAME}. This is Ed, how can I help you today?`);
   reply.type("text/xml");
   return reply.send(twiml.toString());
 });
