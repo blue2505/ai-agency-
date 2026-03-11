@@ -15,7 +15,6 @@ import { Resend } from "resend";
 dotenv.config();
 
 const app = Fastify({ logger: true });
-
 app.register(cors, { origin: true });
 app.register(formbody);
 app.register(fastifyStatic, {
@@ -24,36 +23,35 @@ app.register(fastifyStatic, {
   decorateReply: false,
 });
 
+// ─── Config ───────────────────────────────────────────────────────────────────
+
 const PORT = Number(process.env.PORT || 3000);
 const BASE_URL = (process.env.BASE_URL || "").trim();
-
 const COMPANY_NAME = (process.env.COMPANY_NAME || "E&E HVAC").trim();
 const DIAGNOSTIC_FEE = (process.env.DIAGNOSTIC_FEE || "$99").trim();
 const HOURS = (process.env.HOURS || "Monday through Friday, 8 AM to 6 PM").trim();
-const SERVICE_AREAS = (process.env.SERVICE_AREAS || "Orlando and surrounding areas").trim();
+const SERVICE_AREAS = (process.env.SERVICE_AREAS || "Orlando, Kissimmee, Winter Garden, Ocoee, Clermont, and surrounding Central Florida").trim();
 
 const GOOGLE_CLIENT_EMAIL = (process.env.GOOGLE_CLIENT_EMAIL || "").trim();
-// FIX: Handle both literal \n and escaped \\n for Render env vars
-const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || "")
-  .replace(/\\n/g, "\n")
-  .trim();
+const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim();
 const GOOGLE_CALENDAR_ID = (process.env.GOOGLE_CALENDAR_ID || "").trim();
 const TIMEZONE = (process.env.TIMEZONE || "America/New_York").trim();
-const APPOINTMENT_DURATION_MINUTES = Number(process.env.APPOINTMENT_DURATION_MINUTES || 60);
+const APPT_DURATION_MIN = Number(process.env.APPOINTMENT_DURATION_MINUTES || 60);
 
-const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
 const ELEVENLABS_VOICE_ID = (process.env.ELEVENLABS_VOICE_ID || "").trim();
-
+const ELEVENLABS_API_KEY = (process.env.ELEVENLABS_API_KEY || "").trim();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
-const OPENAI_MODEL = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
-
+const OPENAI_MODEL = (process.env.OPENAI_MODEL || "gpt-4o").trim();
 const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "").trim();
 const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const FROM_NUMBER = (process.env.FROM_NUMBER || "").trim();
-
 const HUBSPOT_API_KEY = (process.env.HUBSPOT_API_KEY || "").trim();
+const EMAIL_FROM = (process.env.EMAIL_FROM || "onboarding@resend.dev").trim();
+
+// ─── Clients ──────────────────────────────────────────────────────────────────
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
 const smsClient =
   TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
     ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -68,339 +66,220 @@ const googleAuth =
       })
     : null;
 
-// FIX: Resend setup with clear logging so you know if it loaded
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-if (!resend) {
-  console.warn("⚠️  RESEND_API_KEY not set — email confirmations will be skipped");
-}
-
-// FIX: EMAIL_FROM must be a verified Resend sender
-// For testing use: onboarding@resend.dev
-// For production use: yourname@yourdomain.com (must be verified in Resend dashboard)
-const EMAIL_FROM = (process.env.EMAIL_FROM || "onboarding@resend.dev").trim();
-
 const calendar = googleAuth ? google.calendar({ version: "v3", auth: googleAuth }) : null;
-if (!calendar) {
-  console.warn("⚠️  Google Calendar credentials not set — calendar bookings will be skipped");
-}
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type BookingStatus = "pending" | "confirmed" | "cancelled" | "reschedule_requested";
+type Message = { role: "user" | "assistant" | "system"; content: string };
 
-type BookingRecord = {
-  id: string;
-  callSid: string;
-  callerPhone?: string;
+type BookingData = {
   name?: string;
-  time?: string;
-  address?: string;
-  issue?: string;
+  phone?: string;
   email?: string;
-  status: BookingStatus;
-  createdAt: string;
-};
-
-type Stage =
-  | "normal"
-  | "offer_booking"
-  | "book_name"
-  | "book_issue"
-  | "book_time"
-  | "book_address"
-  | "book_email_optional"
-  | "book_email_confirm"
-  | "book_confirm"
-  | "reschedule_new_time";
-
-// FIX: Added pendingEmail and conversationHistory to Session type
-type ConversationMessage = {
-  role: "user" | "assistant";
-  content: string;
+  issue?: string;
+  address?: string;
+  requestedTime?: string;
+  confirmedStart?: Date;
+  calendarEventId?: string;
+  confirmed?: boolean;
 };
 
 type Session = {
   callSid: string;
-  callerPhone?: string;
-  stage: Stage;
-  noSpeechCount: number;
-  booking: BookingRecord;
-  pendingEmail?: string;
-  // FIX: conversation history so AI remembers the full call context
-  conversationHistory: ConversationMessage[];
+  callerPhone: string;
+  history: Message[];
+  booking: BookingData;
+  awaitingEmailConfirm?: string;
+  bookedAndDone?: boolean;
+  silenceCount: number;
 };
 
 const sessions = new Map<string, Session>();
-const bookings = new Map<string, BookingRecord>();
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function normalizeText(text: string) {
-  return text.trim().toLowerCase();
-}
-
-function getAbsoluteUrl(route: string) {
-  return BASE_URL.startsWith("https://") ? `${BASE_URL}${route}` : route;
-}
-
-function getSession(callSid: string, callerPhone?: string): Session {
-  const existing = sessions.get(callSid);
-  if (existing) {
-    if (callerPhone && !existing.callerPhone) existing.callerPhone = callerPhone;
-    if (callerPhone && !existing.booking.callerPhone) {
-      existing.booking.callerPhone = callerPhone;
-    }
-    return existing;
-  }
-
-  const booking: BookingRecord = {
-    id: crypto.randomBytes(4).toString("hex"),
-    callSid,
-    callerPhone,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-  };
-
+function getSession(callSid: string, callerPhone: string): Session {
+  if (sessions.has(callSid)) return sessions.get(callSid)!;
   const session: Session = {
     callSid,
     callerPhone,
-    stage: "normal",
-    noSpeechCount: 0,
-    booking,
-    conversationHistory: [], // FIX: start with empty history
+    history: [],
+    booking: { phone: callerPhone },
+    silenceCount: 0,
   };
-
   sessions.set(callSid, session);
   return session;
 }
 
-function resetBookingDraft(session: Session) {
-  session.booking = {
-    id: crypto.randomBytes(4).toString("hex"),
-    callSid: session.callSid,
-    callerPhone: session.callerPhone,
-    status: "pending",
-    createdAt: new Date().toISOString(),
-  };
-}
+// ─── Calendar ─────────────────────────────────────────────────────────────────
 
-function looksLikeYes(text: string) {
-  const t = normalizeText(text);
-  return [
-    "yes", "yeah", "yep", "sure", "okay", "ok", "please",
-    "correct", "confirm", "sounds good", "that works",
-  ].some((k) => t.includes(k));
-}
-
-function looksLikeNo(text: string) {
-  const t = normalizeText(text);
-  return ["no", "nope", "not right now", "maybe later", "don't", "do not"].some(
-    (k) => t.includes(k)
-  );
-}
-
-function looksLikeThanks(text: string) {
-  const t = text.trim().toLowerCase();
-  return [
-    "thank you", "thanks", "thank you so much", "thanks so much",
-    "appreciate it", "perfect thank you", "okay thank you",
-  ].some((k) => t.includes(k));
-}
-
-function looksLikeBye(text: string) {
-  const t = normalizeText(text);
-  return ["bye", "goodbye", "that is all", "that's all", "hang up"].some((k) =>
-    t.includes(k)
-  );
-}
-
-function looksLikeName(text: string) {
-  const t = text.trim();
-  if (!t || t.length > 60) return false;
-  const low = normalizeText(text);
-  const bad = [
-    "yes", "yeah", "yep", "no", "nope", "book", "appointment",
-    "schedule", "tomorrow", "today", "monday", "tuesday", "wednesday",
-    "thursday", "friday", "help", "service", "repair", "technician",
-    "availability", "pricing",
-  ];
-  if (bad.some((w) => low === w || low.includes(w))) return false;
-  return /^[a-zA-Z][a-zA-Z\s.'-]{0,58}$/.test(t);
-}
-
-function looksLikeAddress(text: string) {
-  const t = text.trim();
-  return t.length >= 6 && /\d/.test(t);
-}
-
-function spokenEmailToText(input: string) {
-  let t = input.trim().toLowerCase();
-  const replacements: Array<[RegExp, string]> = [
-    [/\s+at\s+/g, "@"],
-    [/\s+dot\s+/g, "."],
-    [/\s+underscore\s+/g, "_"],
-    [/\s+dash\s+/g, "-"],
-    [/\s+hyphen\s+/g, "-"],
-    [/\s+plus\s+/g, "+"],
-    [/\s+period\s+/g, "."],
-    [/\s+/g, ""],
-  ];
-  for (const [pattern, value] of replacements) {
-    t = t.replace(pattern, value);
+async function getCalendarBusySlots(date: Date): Promise<{ start: Date; end: Date }[]> {
+  if (!calendar || !GOOGLE_CALENDAR_ID) return [];
+  const dayStart = new Date(date);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(date);
+  dayEnd.setHours(23, 59, 59, 999);
+  try {
+    const res = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: dayStart.toISOString(),
+        timeMax: dayEnd.toISOString(),
+        timeZone: TIMEZONE,
+        items: [{ id: GOOGLE_CALENDAR_ID }],
+      },
+    });
+    const busy = res.data?.calendars?.[GOOGLE_CALENDAR_ID]?.busy || [];
+    return busy.map((b: any) => ({ start: new Date(b.start), end: new Date(b.end) }));
+  } catch (err) {
+    app.log.error({ err }, "freebusy query failed");
+    return [];
   }
-  const wordToDigit: Record<string, string> = {
-    zero: "0", one: "1", two: "2", three: "3", four: "4",
-    five: "5", six: "6", seven: "7", eight: "8", nine: "9",
-  };
-  Object.entries(wordToDigit).forEach(([word, digit]) => {
-    t = t.replace(new RegExp(word, "g"), digit);
+}
+
+function isSlotFree(proposed: Date, busy: { start: Date; end: Date }[]): boolean {
+  const end = new Date(proposed.getTime() + APPT_DURATION_MIN * 60000);
+  return !busy.some((s) => proposed < s.end && end > s.start);
+}
+
+function formatTimeForSpeech(date: Date): string {
+  return date.toLocaleString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: TIMEZONE,
   });
-  return t.replace(/[^a-z0-9@._+-]/g, "").trim();
 }
 
-function looksLikeEmail(text: string) {
-  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(text.trim());
+async function checkAvailability(requestedText: string): Promise<{
+  available: boolean;
+  proposedDate?: Date;
+  spokenTime?: string;
+  alternativeSpoken?: string;
+  alternativeDate?: Date;
+}> {
+  const parsed = chrono.parseDate(requestedText, new Date(), { forwardDate: true });
+  if (!parsed) return { available: false };
+
+  const busy = await getCalendarBusySlots(parsed);
+
+  if (isSlotFree(parsed, busy)) {
+    return { available: true, proposedDate: parsed, spokenTime: formatTimeForSpeech(parsed) };
+  }
+
+  for (let h = 1; h <= 8; h++) {
+    const alt = new Date(parsed.getTime() + h * 3600000);
+    if (alt.getHours() < 8 || alt.getHours() >= 18) continue;
+    if (isSlotFree(alt, busy)) {
+      return {
+        available: false,
+        proposedDate: parsed,
+        alternativeDate: alt,
+        alternativeSpoken: formatTimeForSpeech(alt),
+      };
+    }
+  }
+
+  return { available: false, proposedDate: parsed };
 }
 
-function looksLikeSkipEmail(text: string) {
-  const t = normalizeText(text);
-  return [
-    "skip", "no email", "don't send email", "do not send email", "no thanks", "not now",
-  ].some((k) => t.includes(k));
+async function createCalendarEvent(booking: BookingData): Promise<string | null> {
+  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.confirmedStart) return null;
+  const start = booking.confirmedStart;
+  const end = new Date(start.getTime() + APPT_DURATION_MIN * 60000);
+  try {
+    const event = await calendar.events.insert({
+      calendarId: GOOGLE_CALENDAR_ID,
+      requestBody: {
+        summary: `${COMPANY_NAME} – ${booking.name || "Customer"}`,
+        description: `Issue: ${booking.issue || ""}\nPhone: ${booking.phone || ""}\nEmail: ${booking.email || ""}`,
+        location: booking.address || "",
+        start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+        end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+      },
+    });
+    app.log.info({ eventId: event.data.id }, "✅ Calendar event created");
+    return event.data.id || null;
+  } catch (err: any) {
+    app.log.error({ err: err?.message, code: err?.code }, "❌ Calendar event failed");
+    return null;
+  }
 }
 
-function looksLikeBookingIntent(text: string) {
-  const t = normalizeText(text);
-  return [
-    "book", "booking", "appointment", "schedule", "set up",
-    "set something up", "make an appointment", "make appointment",
-    "come out", "send someone", "send a technician", "service call",
-    "have someone come out", "have somebody come out", "can someone come",
-    "i need someone to come", "i want someone to come",
-    "i want to make an appointment", "i need an appointment",
-    "can i book", "can i schedule",
-  ].some((k) => t.includes(k));
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+async function sendSmsConfirmation(booking: BookingData) {
+  if (!smsClient || !FROM_NUMBER || !booking.phone) return;
+  const timeStr = booking.confirmedStart
+    ? formatTimeForSpeech(booking.confirmedStart)
+    : booking.requestedTime || "your requested time";
+  await smsClient.messages.create({
+    from: FROM_NUMBER,
+    to: booking.phone,
+    body:
+      `Hi ${booking.name || "there"}, your ${COMPANY_NAME} appointment is confirmed for ${timeStr} ` +
+      `at ${booking.address || "your address"}. Issue: ${booking.issue || "HVAC service"}. ` +
+      `Call or reply to change or cancel.`,
+  });
+  app.log.info({ to: booking.phone }, "✅ SMS sent");
 }
 
-function looksLikeCancelIntent(text: string) {
-  const t = normalizeText(text);
-  return ["cancel", "cancel appointment", "cancel booking"].some((k) => t.includes(k));
+async function sendEmailConfirmation(booking: BookingData) {
+  if (!resend || !booking.email) return;
+  const timeStr = booking.confirmedStart
+    ? formatTimeForSpeech(booking.confirmedStart)
+    : booking.requestedTime || "To be confirmed";
+  try {
+    await resend.emails.send({
+      from: EMAIL_FROM,
+      to: [booking.email],
+      subject: `${COMPANY_NAME} – Appointment Confirmed`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:520px;color:#222">
+          <h2 style="color:#1a73e8">${COMPANY_NAME}</h2>
+          <p>Hi ${booking.name || "there"},</p>
+          <p>Your appointment has been confirmed. Here are the details:</p>
+          <table style="width:100%;border-collapse:collapse;margin:12px 0">
+            <tr style="background:#f0f4ff"><td style="padding:8px;font-weight:bold">Date &amp; Time</td><td style="padding:8px">${timeStr}</td></tr>
+            <tr><td style="padding:8px;font-weight:bold">Address</td><td style="padding:8px">${booking.address || ""}</td></tr>
+            <tr style="background:#f0f4ff"><td style="padding:8px;font-weight:bold">Issue</td><td style="padding:8px">${booking.issue || ""}</td></tr>
+            <tr><td style="padding:8px;font-weight:bold">Phone</td><td style="padding:8px">${booking.phone || ""}</td></tr>
+          </table>
+          <p>A technician will follow up to confirm your appointment shortly.</p>
+          <p>Thank you,<br/><strong>${COMPANY_NAME}</strong></p>
+        </div>`,
+    });
+    app.log.info({ to: booking.email }, "✅ Email sent");
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "❌ Email failed");
+  }
 }
 
-function looksLikeRescheduleIntent(text: string) {
-  const t = normalizeText(text);
-  return [
-    "reschedule", "change appointment", "change booking",
-    "move appointment", "change the time",
-  ].some((k) => t.includes(k));
+async function createHubSpotContact(booking: BookingData) {
+  if (!HUBSPOT_API_KEY) return;
+  const props: Record<string, string> = { hs_lead_status: "NEW" };
+  if (booking.email) props.email = booking.email;
+  if (booking.phone) props.phone = booking.phone;
+  if (booking.name) {
+    const parts = booking.name.trim().split(/\s+/);
+    props.firstname = parts[0];
+    if (parts.length > 1) props.lastname = parts.slice(1).join(" ");
+  }
+  try {
+    const r = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${HUBSPOT_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: props }),
+    });
+    if (!r.ok && r.status !== 409) app.log.error({ status: r.status }, "HubSpot failed");
+    else app.log.info("✅ HubSpot contact saved");
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "HubSpot error");
+  }
 }
 
-function looksLikeHoursQuestion(text: string) {
-  const t = normalizeText(text);
-  return t.includes("hours") || t.includes("open") || t.includes("close") || t.includes("when are you open");
-}
-
-function looksLikeServiceAreaQuestion(text: string) {
-  const t = normalizeText(text);
-  return (
-    t.includes("service area") || t.includes("serve") ||
-    t.includes("area") || t.includes("come to") || t.includes("do you service")
-  );
-}
-
-function looksLikeUrgentRepair(text: string) {
-  const t = normalizeText(text);
-  return (
-    t.includes("not working") || t.includes("broken") || t.includes("no ac") ||
-    t.includes("ac is out") || t.includes("air conditioner") || t.includes("unit is out") ||
-    t.includes("repair") || t.includes("leak") || t.includes("blowing hot") ||
-    t.includes("not cooling") || t.includes("not heating") || t.includes("hot in here") ||
-    t.includes("warm air") || t.includes("water leaking") || t.includes("frozen coil")
-  );
-}
-
-function looksLikeAvailabilityQuestion(text: string) {
-  const t = normalizeText(text);
-  return (
-    t.includes("availability") || t.includes("today") || t.includes("tomorrow") ||
-    t.includes("earliest") || t.includes("soonest") || t.includes("when can someone come")
-  );
-}
-
-function looksLikePricingQuestion(text: string) {
-  const t = normalizeText(text);
-  return (
-    t.includes("price") || t.includes("pricing") || t.includes("cost") ||
-    t.includes("how much") || t.includes("quote") || t.includes("estimate") ||
-    t.includes("fee") || t.includes("charge") || t.includes("rates")
-  );
-}
-
-function isBroadPricingQuestion(text: string) {
-  const t = normalizeText(text);
-  return (
-    t.includes("prices") || t.includes("pricing") ||
-    t.includes("what do you charge") || t.includes("how much do you charge") ||
-    t.includes("price list") || t.includes("rates") ||
-    t === "pricing" || t === "prices"
-  );
-}
-
-function getSpecificPriceReply(text: string): string | null {
-  const t = normalizeText(text);
-  if (t.includes("diagnostic") || t.includes("service call") || t.includes("trip fee"))
-    return `Our diagnostic fee is ${DIAGNOSTIC_FEE}.`;
-  if (t.includes("tune up") || t.includes("tune-up") || t.includes("maintenance"))
-    return "A standard tune-up is $129.";
-  if (t.includes("drain line") || t.includes("condensate") || t.includes("drain clearing") || t.includes("clogged drain"))
-    return "Condensate drain clearing is $149.";
-  if (t.includes("capacitor"))
-    return "Capacitor replacement usually ranges from $185 to $325, depending on the system.";
-  if (t.includes("thermostat"))
-    return "Thermostat installation typically ranges from $199 to $399, depending on the thermostat model.";
-  if (t.includes("blower motor") || t.includes("blower"))
-    return "Blower motor replacement usually ranges from $450 to $950, depending on the unit.";
-  if (t.includes("contactor"))
-    return "Contactor replacement usually ranges from $175 to $295.";
-  if (t.includes("refrigerant") || t.includes("freon"))
-    return "Refrigerant service is priced after diagnosis because it depends on the system, refrigerant type, and how much is needed.";
-  if (t.includes("new unit") || t.includes("replace unit") || t.includes("system replacement") || t.includes("full replacement") || t.includes("new system"))
-    return "A full system replacement is quoted after an inspection because pricing depends on system size, efficiency, and installation scope.";
-  return null;
-}
-
-function getBroadPricingReply() {
-  return `We can definitely help with pricing. A few common examples are a diagnostic at ${DIAGNOSTIC_FEE}, a tune-up at $129, drain clearing at $149, and repairs like capacitors or contactors vary by system. Which service are you asking about?`;
-}
-
-function getSimpleFaqReply(text: string): string | null {
-  const t = normalizeText(text);
-  if (t.includes("financing"))
-    return "Financing options may be available depending on the job. Someone can follow up with details after an inspection.";
-  if (t.includes("warranty"))
-    return "Warranty coverage varies depending on equipment and service performed. We can go over that once we know the job details.";
-  if (t.includes("same day") || t.includes("soonest") || t.includes("earliest"))
-    return "We can absolutely check for the soonest available appointment, including same-day service when availability allows.";
-  if (t.includes("emergency") || t.includes("after hours") || t.includes("weekend"))
-    return "Availability after hours or on weekends depends on the schedule, but I can still get your request in and have someone follow up as quickly as possible.";
-  if (t.includes("maintenance plan") || t.includes("membership"))
-    return "We can help with ongoing system maintenance. Someone can follow up with the current maintenance plan options if you'd like.";
-  if (t.includes("do you work on") || t.includes("brands"))
-    return "We work on many common residential HVAC systems and brands. Tell me the brand or issue and I can note that for the technician.";
-  if (t.includes("install") || t.includes("inspection"))
-    return "Yes, we help with inspections, repairs, and installation-related requests as well.";
-  return null;
-}
-
-function findLatestBookingByPhone(phone?: string) {
-  if (!phone) return null;
-  const all = [...bookings.values()].filter((b) => b.callerPhone === phone);
-  if (!all.length) return null;
-  all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  return all[0];
-}
-
-// ─── TTS / Audio ──────────────────────────────────────────────────────────────
+// ─── TTS ──────────────────────────────────────────────────────────────────────
 
 function ensureAudioDir() {
   const dir = path.join(process.cwd(), "public", "audio");
@@ -408,767 +287,374 @@ function ensureAudioDir() {
   return dir;
 }
 
-function cacheInfo(text: string) {
+async function elevenLabsTTS(text: string): Promise<string> {
   const hash = crypto.createHash("sha1").update(text).digest("hex");
   const file = `tts_${hash}.mp3`;
-  return { abs: path.join(ensureAudioDir(), file), rel: `/audio/${file}` };
+  const abs = path.join(ensureAudioDir(), file);
+  const rel = `/audio/${file}`;
+  if (fs.existsSync(abs)) return rel;
+
+  const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
+    method: "POST",
+    headers: {
+      "xi-api-key": ELEVENLABS_API_KEY,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_turbo_v2",
+      voice_settings: { stability: 0.45, similarity_boost: 0.88, style: 0.08, use_speaker_boost: true },
+    }),
+  });
+
+  if (!resp.ok) throw new Error(`ElevenLabs ${resp.status}: ${await resp.text()}`);
+  fs.writeFileSync(abs, Buffer.from(await resp.arrayBuffer()));
+  return rel;
 }
 
-async function elevenLabsTTS(text: string): Promise<string> {
-  const cache = cacheInfo(text);
-  if (fs.existsSync(cache.abs)) return cache.rel;
-
-  const resp = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: "eleven_turbo_v2",
-        voice_settings: {
-          stability: 0.42,
-          similarity_boost: 0.9,
-          style: 0.1,
-          use_speaker_boost: true,
-        },
-      }),
-    }
-  );
-
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => "");
-    throw new Error(`ElevenLabs error ${resp.status}: ${msg}`);
-  }
-
-  const buf = Buffer.from(await resp.arrayBuffer());
-  fs.writeFileSync(cache.abs, buf);
-  return cache.rel;
-}
-
-async function speak(twiml: any, text: string) {
+async function playAudio(node: any, text: string) {
   try {
-    const audioPath = await elevenLabsTTS(text);
-    if (BASE_URL.startsWith("https://")) {
-      twiml.play(`${BASE_URL}${audioPath}`);
-      return;
-    }
-  } catch (e) {
-    app.log.error({ err: e }, "ElevenLabs failed; falling back to Polly");
-  }
-  twiml.say({ voice: "Polly.Joanna" }, text);
+    const rel = await elevenLabsTTS(text);
+    if (BASE_URL.startsWith("https://")) { node.play(`${BASE_URL}${rel}`); return; }
+  } catch (e) { app.log.error({ err: e }, "ElevenLabs failed, using Polly"); }
+  node.say({ voice: "Polly.Joanna" }, text);
 }
 
-async function addPromptAndGather(twiml: any, text: string, action = "/voice-intake") {
+async function gatherWithPrompt(twiml: any, text: string) {
   const gather = twiml.gather({
     input: "speech",
-    action: getAbsoluteUrl(action),
+    action: BASE_URL.startsWith("https://") ? `${BASE_URL}/voice-intake` : "/voice-intake",
     method: "POST",
     speechTimeout: "auto",
-    timeout: 5,
+    timeout: 6,
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
     speechModel: "phone_call",
     profanityFilter: false,
   });
-
-  try {
-    const audioPath = await elevenLabsTTS(text);
-    if (BASE_URL.startsWith("https://")) {
-      gather.play(`${BASE_URL}${audioPath}`);
-      return;
-    }
-  } catch (e) {
-    app.log.error({ err: e }, "ElevenLabs gather audio failed");
-  }
-  gather.say({ voice: "Polly.Joanna" }, text);
+  await playAudio(gather, text);
 }
 
-// ─── AI Reply (FIX: now uses full conversation history) ───────────────────────
+// ─── System prompt ────────────────────────────────────────────────────────────
 
-async function assistantReply(session: Session, userText: string): Promise<string> {
-  if (!openai) {
-    return "I can help with scheduling, pricing, service areas, hours, and general HVAC questions. What can I help you with today?";
-  }
+function buildSystemPrompt(): string {
+  return `You are Sarah, the live receptionist for ${COMPANY_NAME}, an HVAC company serving ${SERVICE_AREAS}.
 
-  const systemPrompt = `You are the live office receptionist for ${COMPANY_NAME}, an HVAC company.
+Your personality:
+- Warm, friendly, calm, and completely natural — like a real person on the phone
+- Short conversational sentences — never robotic or stiff
+- Never repeat the caller's words back awkwardly
+- Never say "I heard you say" or read back raw input like form fields
+- Sound genuinely helpful and caring
 
-Company information:
+Company info you can share:
 - Hours: ${HOURS}
 - Service areas: ${SERVICE_AREAS}
-- Diagnostic fee: ${DIAGNOSTIC_FEE}
+- Diagnostic fee: ${DIAGNOSTIC_FEE} (mention it's waived if we do the repair same visit)
+- Services: AC repair, heating repair, full diagnostics, tune-ups, preventative maintenance, thermostat installation, drain line clearing, capacitor replacement, contactor replacement, blower motor replacement, refrigerant service, full system replacement quotes, and inspections
 
-Services offered:
-AC repair, heating repair, HVAC diagnostics, tune-ups and preventative maintenance, thermostat installation, drain line clearing, capacitor replacement, contactor replacement, blower motor replacement, refrigerant service after diagnosis, full system replacement estimates, and inspections.
+Pricing (only share when asked):
+- Diagnostic visit: ${DIAGNOSTIC_FEE}
+- Tune-up / maintenance: $129
+- Drain line clearing: $149  
+- Capacitor replacement: $185–$325
+- Thermostat install: $199–$399
+- Blower motor: $450–$950
+- Most repairs are quoted after the diagnostic
 
-Your tone:
-- Warm, calm, natural, conversational, and human
-- Sound like a real front desk receptionist answering the phone
-- Keep responses brief and easy to hear over the phone
-- Do NOT say "I am listening" or repeat the caller's sentence back to them
-- Keep replies to one or two short sentences unless a longer answer is truly needed
+How to handle the booking flow (collect naturally in conversation):
+1. Get their name — ask naturally, like "Sure! Who am I speaking with?"
+2. Ask what's going on with the system
+3. Ask what day and time works for them — then wait for [AVAILABILITY] info before confirming
+4. Get the service address
+5. Ask for email once, casually — "And if you'd like a confirmation email, what's the best email for you?" Accept skip/no thanks
+6. Summarize warmly before confirming — say something like "Alright, so I've got [name] down for [issue] on [day] at [time] at [address]. Does that all look right?"
+7. After they confirm, wrap it up warmly
 
-Guidelines:
-- Answer the caller's actual question directly
-- Remember everything said earlier in this call and use that context
-- If they mentioned a problem earlier, refer back to it naturally
-- If appropriate, offer to schedule service
-- If unsure, ask one short clarifying question
-- If the caller seems ready to book, gently move them in that direction`;
+Availability:
+- When a [AVAILABILITY] message appears, use that information to respond naturally
+- If available: confirm it naturally — "Perfect, that time works!"
+- If taken: "Oh, that time is actually taken — I do have an opening at [alt time] though, would that work for you?"
+- If nothing available: "Hmm, I'm not seeing anything open at that time. What else might work for you?"
 
-  // FIX: Build messages array with full history for context
+Email capture:
+- If they say an email address, confirm it back naturally: "Got it — so that's [email said as words], is that right?"
+- If they skip, move on without asking again
+
+After booking confirmed:
+- Warmly summarize: "You're all set! I've got you down for [time]. A technician will reach out to confirm. Anything else I can help you with?"
+- Keep it short and genuine
+
+Rules:
+- NEVER loop on the same question
+- If they ask about services, give a friendly natural summary — don't list robotically
+- Answer questions naturally and come back to the booking gently
+- 1–3 sentences max unless explaining services or summarizing booking
+- Sound human every single time`.trim();
+}
+
+// ─── Email parser ─────────────────────────────────────────────────────────────
+
+function parseSpokenEmail(text: string): string | null {
+  let t = text.trim().toLowerCase();
+  t = t.replace(/\s+at\s+/g, "@");
+  t = t.replace(/\s+dot\s+/g, ".");
+  t = t.replace(/\s+underscore\s+/g, "_");
+  t = t.replace(/\s+(dash|hyphen)\s+/g, "-");
+  t = t.replace(/\s+/g, "");
+  const digits: Record<string, string> = {
+    zero:"0",one:"1",two:"2",three:"3",four:"4",
+    five:"5",six:"6",seven:"7",eight:"8",nine:"9",
+  };
+  Object.entries(digits).forEach(([w, d]) => { t = t.replace(new RegExp(w, "g"), d); });
+  t = t.replace(/[^a-z0-9@._+-]/g, "");
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(t) ? t : null;
+}
+
+function emailToSpeech(email: string): string {
+  return email.replace("@", " at ").replace(/\./g, " dot ");
+}
+
+function isYes(t: string) {
+  return ["yes","yeah","yep","correct","that's right","sure","right","exactly","uh huh"].some((w) => t.toLowerCase().includes(w));
+}
+function isNo(t: string) {
+  return ["no","nope","wrong","that's not","incorrect","not right"].some((w) => t.toLowerCase().includes(w));
+}
+function isSkip(t: string) {
+  return ["skip","no email","no thanks","nope","don't","no need","not now","i don't"].some((w) => t.toLowerCase().includes(w));
+}
+function isBye(t: string) {
+  return ["bye","goodbye","that's all","that is all","hang up","have a good"].some((w) => t.toLowerCase().includes(w));
+}
+function isThanks(t: string) {
+  return ["thank you","thanks so much","appreciate it","perfect thanks","okay thanks","great thanks","thank you so much"].some((w) => t.toLowerCase().includes(w));
+}
+function isConfirm(t: string) {
+  return ["confirm","that's correct","that works","sounds good","book it","go ahead","yes book","looks good","that's right","correct"].some((w) => t.toLowerCase().includes(w));
+}
+function hasTimeReference(t: string) {
+  return /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s?(am|pm)|morning|afternoon|evening|next week)\b/i.test(t);
+}
+
+// ─── Main turn handler ────────────────────────────────────────────────────────
+
+async function handleTurn(session: Session, userSpeech: string): Promise<string> {
+  if (!openai) return "I'm sorry, I'm having some trouble right now. Please call back shortly.";
+
+  // Add to history
+  session.history.push({ role: "user", content: userSpeech });
+
+  // ── Email confirmation flow ──
+  if (session.awaitingEmailConfirm) {
+    if (isYes(userSpeech)) {
+      session.booking.email = session.awaitingEmailConfirm;
+      session.awaitingEmailConfirm = undefined;
+      session.history.push({ role: "system", content: `Email confirmed and saved: ${session.booking.email}. Continue the booking — ask for service address if not yet collected.` });
+    } else if (isSkip(userSpeech)) {
+      session.awaitingEmailConfirm = undefined;
+      session.history.push({ role: "system", content: "Caller skipped email. Do not ask for email again. Continue to service address." });
+    } else if (isNo(userSpeech)) {
+      session.awaitingEmailConfirm = undefined;
+      session.history.push({ role: "system", content: "Email was wrong. Ask them to say it again slowly, or skip." });
+    } else {
+      const retry = parseSpokenEmail(userSpeech);
+      if (retry) {
+        session.awaitingEmailConfirm = retry;
+        const reply = `Let me try that — I have ${emailToSpeech(retry)}. Is that right?`;
+        session.history.push({ role: "assistant", content: reply });
+        return reply;
+      }
+      const reply = "Sorry about that — could you say the email one more time, or just say skip if you'd rather not?";
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+  }
+
+  // ── Detect email in speech ──
+  if (!session.booking.email && !session.awaitingEmailConfirm && !isSkip(userSpeech)) {
+    const foundEmail = parseSpokenEmail(userSpeech);
+    if (foundEmail) {
+      session.awaitingEmailConfirm = foundEmail;
+      const reply = `Got it — so that's ${emailToSpeech(foundEmail)}, is that right?`;
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+  }
+
+  // ── Availability check ──
+  let availabilityNote = "";
+  if (hasTimeReference(userSpeech) && !session.booking.confirmedStart) {
+    session.booking.requestedTime = userSpeech;
+    const avail = await checkAvailability(userSpeech);
+
+    if (avail.available && avail.proposedDate) {
+      // Store the proposed date — will be confirmed when user says confirm
+      session.booking.requestedTime = userSpeech;
+      // Temporarily store parsed date for later confirmation
+      (session as any)._pendingDate = avail.proposedDate;
+      availabilityNote = `[AVAILABILITY] The requested time (${avail.spokenTime}) is OPEN on the calendar. You can confirm this with the caller and move forward.`;
+    } else if (avail.alternativeDate) {
+      (session as any)._pendingDate = avail.alternativeDate;
+      availabilityNote = `[AVAILABILITY] That time is NOT available. The next open slot is ${avail.alternativeSpoken}. Suggest this to the caller naturally.`;
+    } else {
+      (session as any)._pendingDate = null;
+      availabilityNote = `[AVAILABILITY] No availability found near that time. Ask the caller to suggest a different time.`;
+    }
+  }
+
+  // ── Booking confirmation ──
+  if (
+    isConfirm(userSpeech) &&
+    !session.bookedAndDone &&
+    session.booking.name &&
+    (session.booking.requestedTime || (session as any)._pendingDate)
+  ) {
+    const pendingDate = (session as any)._pendingDate;
+    if (pendingDate) {
+      session.booking.confirmedStart = pendingDate;
+    } else if (session.booking.requestedTime) {
+      const avail = await checkAvailability(session.booking.requestedTime);
+      if (avail.proposedDate) session.booking.confirmedStart = avail.proposedDate;
+    }
+
+    if (session.booking.confirmedStart) {
+      session.bookedAndDone = true;
+      session.booking.confirmed = true;
+
+      // Finalize all integrations
+      const [eventId] = await Promise.all([
+        createCalendarEvent(session.booking).catch(() => null),
+        sendSmsConfirmation(session.booking).catch((e) => app.log.error({ e }, "sms failed")),
+        sendEmailConfirmation(session.booking).catch((e) => app.log.error({ e }, "email failed")),
+        createHubSpotContact(session.booking).catch((e) => app.log.error({ e }, "hubspot failed")),
+      ]);
+
+      if (eventId) session.booking.calendarEventId = eventId;
+
+      const timeStr = formatTimeForSpeech(session.booking.confirmedStart);
+      const firstName = session.booking.name?.split(" ")[0] || "there";
+      const reply = `You're all set, ${firstName}! I've got you scheduled for ${timeStr}. A technician will reach out to confirm everything. Is there anything else I can help you with?`;
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+  }
+
+  // ── Build messages for OpenAI ──
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-    // Include conversation history (last 10 turns to avoid token limits)
-    ...session.conversationHistory.slice(-10).map((m) => ({
-      role: m.role as "user" | "assistant",
+    { role: "system", content: buildSystemPrompt() },
+    ...(availabilityNote ? [{ role: "system" as const, content: availabilityNote }] : []),
+    ...session.history.slice(-18).map((m) => ({
+      role: m.role as "user" | "assistant" | "system",
       content: m.content,
     })),
-    { role: "user", content: userText },
   ];
 
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    temperature: 0.3,
-    max_tokens: 100,
+    temperature: 0.45,
+    max_tokens: 130,
     messages,
   });
 
-  const reply =
-    resp.choices?.[0]?.message?.content?.trim() ||
-    "I'm sorry, could you repeat that for me?";
-
-  // FIX: Save this exchange to history so the next turn remembers it
-  session.conversationHistory.push({ role: "user", content: userText });
-  session.conversationHistory.push({ role: "assistant", content: reply });
-
+  const reply = resp.choices[0]?.message?.content?.trim() || "I'm sorry, could you say that again?";
+  session.history.push({ role: "assistant", content: reply });
   return reply;
-}
-
-// ─── Calendar ─────────────────────────────────────────────────────────────────
-
-async function createCalendarBooking(booking: BookingRecord) {
-  app.log.info(
-    { hasCalendar: !!calendar, calendarId: GOOGLE_CALENDAR_ID, bookingTime: booking.time },
-    "createCalendarBooking called"
-  );
-
-  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) {
-    app.log.error(
-      { hasCalendar: !!calendar, calendarId: GOOGLE_CALENDAR_ID, bookingTime: booking.time },
-      "Calendar prerequisites missing"
-    );
-    return null;
-  }
-
-  const start = chrono.parseDate(booking.time, new Date(), { forwardDate: true });
-  app.log.info({ parsedStart: start ? start.toISOString() : null }, "parsed calendar start");
-
-  if (!start) {
-    app.log.error({ bookingTime: booking.time }, "Could not parse booking time");
-    return null;
-  }
-
-  const end = new Date(start.getTime() + APPOINTMENT_DURATION_MINUTES * 60000);
-
-  try {
-    const event = await calendar.events.insert({
-      calendarId: GOOGLE_CALENDAR_ID,
-      requestBody: {
-        summary: `${COMPANY_NAME} Service Appointment`,
-        description: `Customer: ${booking.name || ""}
-Issue: ${booking.issue || ""}
-Phone: ${booking.callerPhone || ""}
-Email: ${booking.email || ""}`,
-        location: booking.address || "",
-        start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-        end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
-      },
-    });
-
-    app.log.info(
-      { eventId: event.data.id, htmlLink: event.data.htmlLink },
-      "✅ Calendar event created"
-    );
-    return event.data;
-  } catch (err: any) {
-    // FIX: Log the full error message to help debug auth issues
-    app.log.error(
-      { err, message: err?.message, code: err?.code, errors: err?.errors },
-      "❌ Calendar booking failed"
-    );
-    return null;
-  }
-}
-
-// ─── SMS ──────────────────────────────────────────────────────────────────────
-
-async function maybeSendSmsConfirmation(booking: BookingRecord) {
-  if (!smsClient || !FROM_NUMBER || !booking.callerPhone) return;
-
-  const text =
-    `Thanks for calling ${COMPANY_NAME}. ` +
-    `Your appointment request is confirmed for ${booking.time || "the requested time"} ` +
-    `at ${booking.address || "the service address"} under ${booking.name || "your name"}. ` +
-    `Issue: ${booking.issue || "HVAC service request"}. ` +
-    `Reply or call us if you need to change or cancel.`;
-
-  await smsClient.messages.create({ from: FROM_NUMBER, to: booking.callerPhone, body: text });
-}
-
-// ─── Email (FIX: better logging + clear domain guidance) ──────────────────────
-
-async function maybeSendEmailConfirmation(booking: BookingRecord) {
-  if (!resend) {
-    app.log.warn("Email skipped: RESEND_API_KEY not configured");
-    return;
-  }
-
-  if (!booking.email) {
-    app.log.info("Email skipped: no email on booking");
-    return;
-  }
-
-  const cleanedEmail = booking.email.trim().toLowerCase();
-
-  if (!looksLikeEmail(cleanedEmail)) {
-    app.log.error({ cleanedEmail }, "Email skipped: invalid format");
-    return;
-  }
-
-  // FIX: Validate EMAIL_FROM is set and warn if using test address
-  if (!EMAIL_FROM) {
-    app.log.error("EMAIL_FROM env var is not set — email will fail");
-    return;
-  }
-
-  app.log.info({ from: EMAIL_FROM, to: cleanedEmail }, "Attempting to send email...");
-
-  try {
-    const result = await resend.emails.send({
-      from: EMAIL_FROM,
-      to: [cleanedEmail],
-      subject: `${COMPANY_NAME} Appointment Confirmation`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 500px;">
-          <h2 style="color: #1a73e8;">${COMPANY_NAME} — Appointment Confirmation</h2>
-          <p>Hello ${booking.name || ""},</p>
-          <p>Your appointment request has been received. Here are your details:</p>
-          <table style="width:100%; border-collapse: collapse;">
-            <tr><td style="padding:6px; font-weight:bold;">Date & Time</td><td style="padding:6px;">${booking.time || "To be confirmed"}</td></tr>
-            <tr style="background:#f5f5f5;"><td style="padding:6px; font-weight:bold;">Address</td><td style="padding:6px;">${booking.address || ""}</td></tr>
-            <tr><td style="padding:6px; font-weight:bold;">Issue</td><td style="padding:6px;">${booking.issue || ""}</td></tr>
-            <tr style="background:#f5f5f5;"><td style="padding:6px; font-weight:bold;">Phone</td><td style="padding:6px;">${booking.callerPhone || ""}</td></tr>
-          </table>
-          <p style="margin-top:16px;">Someone from our office will follow up to confirm your appointment shortly.</p>
-          <p>Thank you,<br/><strong>${COMPANY_NAME}</strong></p>
-        </div>
-      `,
-      text: `Hello ${booking.name || ""},\n\nYour appointment request has been scheduled.\n\nTime: ${booking.time || ""}\nAddress: ${booking.address || ""}\nIssue: ${booking.issue || ""}\n\nSomeone from our office will follow up shortly.\n\nThank you,\n${COMPANY_NAME}`,
-    });
-
-    if ((result as any)?.error) {
-      app.log.error({ result, to: cleanedEmail }, "❌ Email send failed (Resend error)");
-      return;
-    }
-
-    app.log.info({ result, to: cleanedEmail }, "✅ Email confirmation sent");
-  } catch (err: any) {
-    app.log.error({ err, message: err?.message, to: cleanedEmail }, "❌ Email send exception");
-  }
-}
-
-// ─── HubSpot ──────────────────────────────────────────────────────────────────
-
-async function createHubSpotContact(booking: BookingRecord) {
-  if (!HUBSPOT_API_KEY) return;
-
-  const properties: Record<string, string> = {};
-  if (booking.email) properties.email = booking.email;
-  if (booking.callerPhone) properties.phone = booking.callerPhone;
-
-  if (booking.name) {
-    const parts = booking.name.trim().split(/\s+/);
-    properties.firstname = parts[0] || "";
-    if (parts.length > 1) properties.lastname = parts.slice(1).join(" ");
-  }
-
-  properties.hs_lead_status = "NEW";
-
-  const resp = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${HUBSPOT_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ properties }),
-  });
-
-  const respText = await resp.text().catch(() => "");
-  app.log.info({ status: resp.status, body: respText }, "HubSpot response");
-
-  if (!resp.ok) {
-    // FIX: 409 = contact already exists, that's fine — don't throw
-    if (resp.status === 409) {
-      app.log.info({ phone: booking.callerPhone }, "HubSpot: contact already exists, skipping");
-      return;
-    }
-    throw new Error(`HubSpot create failed ${resp.status}: ${respText}`);
-  }
-}
-
-// ─── Side-question handler during booking flow ────────────────────────────────
-
-async function answerQuestionDuringBooking(session: Session, text: string) {
-  if (looksLikePricingQuestion(text)) {
-    const specificPrice = getSpecificPriceReply(text);
-    if (specificPrice) return specificPrice;
-    if (isBroadPricingQuestion(text)) return getBroadPricingReply();
-    return "I can definitely help with pricing. Which service are you asking about?";
-  }
-  if (looksLikeHoursQuestion(text)) return `We are open ${HOURS}.`;
-  if (looksLikeServiceAreaQuestion(text)) return `We service ${SERVICE_AREAS}.`;
-  if (looksLikeAvailabilityQuestion(text))
-    return "We can help request the soonest available appointment, including same-day service when available.";
-  const faqReply = getSimpleFaqReply(text);
-  if (faqReply) return faqReply;
-  // FIX: Pass session so it has conversation history context
-  return assistantReply(
-    session,
-    `The caller is in the booking process and asked this side question: "${text}". Answer briefly and naturally like a real HVAC receptionist, then gently return to the booking flow.`
-  );
-}
-
-// ─── Warmup ───────────────────────────────────────────────────────────────────
-
-async function warmCommonAudio() {
-  const phrases = [
-    `Hello, this is ${COMPANY_NAME}, how can I help you?`,
-    `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`,
-    "Perfect. What name should I put the appointment under?",
-    "Thank you. What issue are you having with the system today?",
-    "What day and time would you like for the appointment?",
-    "What is the full service address including street name, city, and zip code?",
-    "If you'd like an email confirmation too, please say your email slowly, for example anna at gmail dot com, or say skip.",
-    "Please say confirm to finalize, change to edit it, or cancel to cancel it.",
-    "No problem at all. What else can I help you with today?",
-    "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly.",
-  ];
-
-  await Promise.all(
-    phrases.map((text) =>
-      elevenLabsTTS(text).catch((err) => {
-        app.log.error({ err, text }, "Warmup phrase failed");
-      })
-    )
-  );
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-app.get("/health", async () => ({ ok: true }));
+app.get("/health", async () => ({ ok: true, time: new Date().toISOString() }));
 
 app.post("/voice-webhook", async (req: any, reply: any) => {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
-
-  const callSid = (req.body?.CallSid || "NO_CALLSID").toString();
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
+  const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
   getSession(callSid, callerPhone);
-
-  await addPromptAndGather(twiml, `Hello, this is ${COMPANY_NAME}, how can I help you?`);
-
+  await gatherWithPrompt(twiml, `Thank you for calling ${COMPANY_NAME}. This is Sarah, how can I help you today?`);
   reply.type("text/xml");
   return reply.send(twiml.toString());
 });
 
 app.post("/voice-intake", async (req: any, reply: any) => {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
 
   try {
     const speech = (req.body?.SpeechResult ?? "").toString().trim();
-    const callSid = (req.body?.CallSid || "NO_CALLSID").toString();
+    const callSid = (req.body?.CallSid || "").toString();
     const callerPhone = (req.body?.From || "").toString().trim();
     const session = getSession(callSid, callerPhone);
 
-    app.log.info({ callSid, speech, stage: session.stage }, "Speech captured");
+    app.log.info({ speech }, "incoming speech");
 
-    // ── No speech ──
+    // No speech
     if (!speech) {
-      session.noSpeechCount += 1;
-      if (session.noSpeechCount >= 2) {
-        await speak(twiml, "I'm sorry, I didn't catch anything. Please call us back when you're ready. Thank you.");
+      session.silenceCount += 1;
+      if (session.silenceCount >= 3) {
+        await playAudio(twiml, "I'm sorry I couldn't hear you. Feel free to call us back anytime. Have a great day!");
         twiml.hangup();
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
-      await addPromptAndGather(twiml, "I'm sorry, I didn't catch that. Could you say that one more time?");
+      const prompts = [
+        "I'm sorry, I didn't catch that. Could you say that again?",
+        "Still having trouble hearing you — could you speak a little louder?",
+      ];
+      await gatherWithPrompt(twiml, prompts[Math.min(session.silenceCount - 1, prompts.length - 1)]);
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
 
-    session.noSpeechCount = 0;
+    session.silenceCount = 0;
 
-    // ── Thanks / Bye ──
-    if (looksLikeThanks(speech)) {
-      await speak(twiml, `You're welcome. Thank you for calling ${COMPANY_NAME}. Have a great day.`);
+    // Goodbye
+    if (isBye(speech)) {
+      await playAudio(twiml, `Thank you for calling ${COMPANY_NAME}. Have a wonderful day!`);
       twiml.hangup();
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
 
-    if (looksLikeBye(speech)) {
-      await speak(twiml, `Thank you for calling ${COMPANY_NAME}. Have a great day.`);
+    // Thanks after booking
+    if (isThanks(speech) && session.bookedAndDone) {
+      await playAudio(twiml, `Of course! We look forward to seeing you. Have a great day!`);
       twiml.hangup();
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
 
-    // ── Cancel ──
-    if (looksLikeCancelIntent(speech)) {
-      const latest = findLatestBookingByPhone(session.callerPhone);
-      if (!latest || latest.status === "cancelled") {
-        await addPromptAndGather(twiml, "I don't see an active appointment under this number right now. What else can I help you with?");
-        session.stage = "normal";
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      latest.status = "cancelled";
-      bookings.set(latest.id, latest);
-      await addPromptAndGather(twiml, `No problem. I have the appointment under ${latest.name || "your name"} marked as cancelled. What else can I help you with?`);
-      session.stage = "normal";
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Reschedule ──
-    if (looksLikeRescheduleIntent(speech)) {
-      const latest = findLatestBookingByPhone(session.callerPhone);
-      if (!latest || latest.status === "cancelled") {
-        await addPromptAndGather(twiml, "I don't see an active appointment to change under this number. Would you like to schedule a new one instead?");
-        session.stage = "offer_booking";
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      session.booking = { ...latest };
-      session.stage = "reschedule_new_time";
-      await addPromptAndGather(twiml, `Of course. Your current appointment is for ${latest.time || "the requested time"}. What new day and time would you prefer?`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Offer booking stage ──
-    if (session.stage === "offer_booking") {
-      if (looksLikeYes(speech)) {
-        session.stage = "book_name";
-        resetBookingDraft(session);
-        await addPromptAndGather(twiml, "Perfect. What name should I put the appointment under?");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      if (looksLikeNo(speech)) {
-        session.stage = "normal";
-        await addPromptAndGather(twiml, "No problem at all. What else can I help you with today?");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      // FIX: Pass session to answerQuestionDuringBooking
-      const offerReply = await answerQuestionDuringBooking(session, speech);
-      await addPromptAndGather(twiml, `${offerReply} Would you like me to get that scheduled for you?`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Name ──
-    if (session.stage === "book_name") {
-      if (!looksLikeName(speech)) {
-        await addPromptAndGather(twiml, "I'm sorry, I didn't catch the name. What name should I put the appointment under?");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      session.booking.name = speech;
-      session.stage = "book_issue";
-      await addPromptAndGather(twiml, "Thank you. What issue are you having with the system today?");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Issue ──
-    if (session.stage === "book_issue") {
-      session.booking.issue = speech;
-      session.stage = "book_time";
-      await addPromptAndGather(twiml, "What day and time would you like for the appointment?");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Time ──
-    if (session.stage === "book_time") {
-      session.booking.time = speech;
-      session.stage = "book_address";
-      await addPromptAndGather(twiml, "What is the full service address including street name, city, and zip code?");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Address ──
-    if (session.stage === "book_address") {
-      if (!looksLikeAddress(speech)) {
-        await addPromptAndGather(twiml, "Please give me the full service address including street name, city, and zip code.");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      session.booking.address = speech.trim();
-      session.stage = "book_email_optional";
-      await addPromptAndGather(twiml, "If you'd like an email confirmation, please say your email slowly, for example anna at gmail dot com, or say skip.");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Email optional ──
-    if (session.stage === "book_email_optional") {
-      if (looksLikeSkipEmail(speech)) {
-        session.stage = "book_confirm";
-        const b = session.booking;
-        await addPromptAndGather(
-          twiml,
-          `Just to confirm: appointment for ${b.name}, for ${b.issue}, on ${b.time}, at ${b.address}. Say confirm to finalize, change to edit, or cancel to cancel.`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      const possibleEmail = spokenEmailToText(speech);
-      if (!looksLikeEmail(possibleEmail)) {
-        await addPromptAndGather(twiml, "I didn't catch a valid email. Please say it again slowly, for example anna at gmail dot com, or say skip.");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      session.pendingEmail = possibleEmail;
-      session.stage = "book_email_confirm";
-      await addPromptAndGather(twiml, `I heard ${possibleEmail}. Is that correct? Say yes, or say the email again, or say skip.`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Email confirm ──
-    if (session.stage === "book_email_confirm") {
-      if (looksLikeYes(speech) && session.pendingEmail) {
-        session.booking.email = session.pendingEmail;
-        session.pendingEmail = undefined;
-        session.stage = "book_confirm";
-        const b = session.booking;
-        await addPromptAndGather(
-          twiml,
-          `Just to confirm: appointment for ${b.name}, for ${b.issue}, on ${b.time}, at ${b.address}. Say confirm to finalize, change to edit, or cancel to cancel.`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      if (looksLikeSkipEmail(speech)) {
-        session.pendingEmail = undefined;
-        session.stage = "book_confirm";
-        const b = session.booking;
-        await addPromptAndGather(
-          twiml,
-          `Just to confirm: appointment for ${b.name}, for ${b.issue}, on ${b.time}, at ${b.address}. Say confirm to finalize, change to edit, or cancel to cancel.`
-        );
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      const possibleEmail = spokenEmailToText(speech);
-      if (!looksLikeEmail(possibleEmail)) {
-        await addPromptAndGather(twiml, "I still didn't catch a valid email. Please say it again slowly, or say skip.");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      session.pendingEmail = possibleEmail;
-      await addPromptAndGather(twiml, `I heard ${possibleEmail}. Is that correct? Say yes, or say it again, or say skip.`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Book: Confirm ──
-    if (session.stage === "book_confirm") {
-      const t = normalizeText(speech);
-
-      if (t.includes("change") || t.includes("edit") || t.includes("reschedule")) {
-        session.stage = "book_time";
-        await addPromptAndGather(twiml, "Of course. What day and time would you like instead?");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      if (t.includes("cancel")) {
-        session.stage = "normal";
-        resetBookingDraft(session);
-        await addPromptAndGather(twiml, "No problem. I cancelled that request. What else can I help you with?");
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      if (t.includes("confirm") || looksLikeYes(speech)) {
-        session.booking.status = "confirmed";
-        bookings.set(session.booking.id, { ...session.booking });
-
-        // Run all async confirmations in parallel, log errors individually
-        const results = await Promise.allSettled([
-          createCalendarBooking(session.booking),
-          maybeSendSmsConfirmation(session.booking),
-          maybeSendEmailConfirmation(session.booking),
-          createHubSpotContact(session.booking),
-        ]);
-
-        results.forEach((r, i) => {
-          const labels = ["Calendar", "SMS", "Email", "HubSpot"];
-          if (r.status === "rejected") {
-            app.log.error({ err: r.reason }, `${labels[i]} step failed`);
-          } else {
-            app.log.info(`${labels[i]} step completed`);
-          }
-        });
-
-        session.stage = "normal";
-        await speak(twiml, "You're all set. Your appointment request has been scheduled, and someone from our office will follow up shortly. Thank you for calling. Have a great day.");
-        twiml.hangup();
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-
-      await addPromptAndGather(twiml, "Please say confirm to finalize, change to edit it, or cancel to cancel it.");
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Reschedule: New time ──
-    if (session.stage === "reschedule_new_time") {
-      session.booking.time = speech;
-      session.booking.status = "reschedule_requested";
-      bookings.set(session.booking.id, { ...session.booking });
-
-      await maybeSendSmsConfirmation(session.booking).catch((err) => {
-        app.log.error({ err }, "SMS reschedule confirmation failed");
-      });
-
-      await addPromptAndGather(
-        twiml,
-        `Perfect. I updated that appointment to ${session.booking.time}. Someone from ${COMPANY_NAME} will confirm the change shortly. What else can I help you with?`
-      );
-      session.stage = "normal";
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // ── Normal stage: detect intent ──
-    if (looksLikeBookingIntent(speech)) {
-      resetBookingDraft(session);
-      session.stage = "offer_booking";
-      await addPromptAndGather(twiml, `Absolutely. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    if (looksLikePricingQuestion(speech)) {
-      const specificPrice = getSpecificPriceReply(speech);
-      if (specificPrice) {
-        await addPromptAndGather(twiml, specificPrice);
-        reply.type("text/xml");
-        return reply.send(twiml.toString());
-      }
-      await addPromptAndGather(twiml, getBroadPricingReply());
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    if (looksLikeHoursQuestion(speech)) {
-      await addPromptAndGather(twiml, `We are open ${HOURS}.`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    if (looksLikeServiceAreaQuestion(speech)) {
-      await addPromptAndGather(twiml, `We service ${SERVICE_AREAS}.`);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    const faqReply = getSimpleFaqReply(speech);
-    if (faqReply) {
-      await addPromptAndGather(twiml, faqReply);
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    if (looksLikeUrgentRepair(speech)) {
-      session.stage = "offer_booking";
-      await addPromptAndGather(
-        twiml,
-        `I'm sorry you're dealing with that. We can definitely help. Our diagnostic fee is ${DIAGNOSTIC_FEE}. Are you okay to proceed with the appointment?`
-      );
-      reply.type("text/xml");
-      return reply.send(twiml.toString());
-    }
-
-    // FIX: Pass session so AI has conversation history
-    const aiReply = await assistantReply(session, speech);
-    await addPromptAndGather(
-      twiml,
-      aiReply || "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?"
-    );
+    const responseText = await handleTurn(session, speech);
+    await gatherWithPrompt(twiml, responseText);
 
     reply.type("text/xml");
     return reply.send(twiml.toString());
-
   } catch (err) {
-    app.log.error({ err }, "voice-intake crashed");
-    await addPromptAndGather(twiml, "I can help with appointments, pricing, service areas, and HVAC issues. What would you like help with?");
+    app.log.error({ err }, "voice-intake error");
+    await gatherWithPrompt(twiml, "I'm sorry, I had a little trouble there. Could you say that again?");
     reply.type("text/xml");
     return reply.send(twiml.toString());
   }
 });
 
-// ─── Error handler ────────────────────────────────────────────────────────────
-
 app.setErrorHandler((err, _req, reply) => {
-  app.log.error({ err }, "Global error handler");
-  try {
-    const VR = twilio.twiml.VoiceResponse;
-    const twiml = new VR();
-    twiml.say({ voice: "Polly.Joanna" }, "I'm sorry, please try again.");
-    twiml.redirect({ method: "POST" }, "/voice-webhook");
-    reply.status(200).type("text/xml").send(twiml.toString());
-  } catch {
-    reply.status(200).type("text/xml").send("<Response><Say>Okay.</Say></Response>");
-  }
+  app.log.error({ err }, "global error");
+  reply.status(200).type("text/xml").send(
+    `<Response><Say voice="Polly.Joanna">I'm sorry, something went wrong. Please try again.</Say><Redirect method="POST">/voice-webhook</Redirect></Response>`
+  );
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen({ port: PORT, host: "0.0.0.0" })
-  .then(async () => {
-    console.log(`✅ Server listening on port ${PORT}`);
-    console.log(`📧 Email from: ${EMAIL_FROM}`);
-    console.log(`📅 Calendar: ${calendar ? "configured" : "NOT configured"}`);
-    console.log(`💬 SMS: ${smsClient ? "configured" : "NOT configured"}`);
-    console.log(`📊 HubSpot: ${HUBSPOT_API_KEY ? "configured" : "NOT configured"}`);
-    console.log(`🔑 Resend: ${resend ? "configured" : "NOT configured"}`);
-
-    if (ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID) {
-      warmCommonAudio().catch((e) => console.error("Warmup failed:", e));
-    }
-  })
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+app.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
+  console.log(`✅ ${COMPANY_NAME} AI Agent running on port ${PORT}`);
+  console.log(`📅 Calendar: ${calendar ? "✅ connected" : "❌ not configured"}`);
+  console.log(`📧 Resend:   ${resend ? "✅ connected" : "❌ not configured"}`);
+  console.log(`💬 SMS:      ${smsClient ? "✅ connected" : "❌ not configured"}`);
+  console.log(`📊 HubSpot:  ${HUBSPOT_API_KEY ? "✅ connected" : "❌ not configured"}`);
+  console.log(`🔊 Voice:    ${ELEVENLABS_VOICE_ID ? "✅ ElevenLabs" : "⚠️  Polly fallback"}`);
+}).catch((err) => { console.error(err); process.exit(1); });
 
