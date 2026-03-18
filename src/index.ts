@@ -47,6 +47,17 @@ const TWILIO_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "").trim();
 const TWILIO_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const FROM_NUMBER = (process.env.FROM_NUMBER || "").trim();
 const HUBSPOT_API_KEY = (process.env.HUBSPOT_API_KEY || "").trim();
+
+// ─── Med Spa Config ──────────────────────────────────────────────────────────
+const MEDSPA_TWILIO_NUMBER = (process.env.MEDSPA_TWILIO_NUMBER || "").trim();
+const HVAC_TWILIO_NUMBER = (process.env.HVAC_TWILIO_NUMBER || "").trim();
+const MEDSPA_COMPANY_NAME = (process.env.MEDSPA_COMPANY_NAME || "Luxe Glow Med Spa").trim();
+const MEDSPA_AGENT_NAME = (process.env.MEDSPA_AGENT_NAME || "Sofia").trim();
+const MEDSPA_HOURS = (process.env.MEDSPA_HOURS || "Monday through Saturday 9 AM to 7 PM").trim();
+const MEDSPA_SERVICE_AREAS = (process.env.MEDSPA_SERVICE_AREAS || "Orlando and surrounding areas").trim();
+const MEDSPA_OPENAI_VOICE = (process.env.MEDSPA_OPENAI_VOICE || "nova").trim();
+const MEDSPA_EMAIL_FROM = (process.env.MEDSPA_EMAIL_FROM || "onboarding@resend.dev").trim();
+
 const EMAIL_FROM = (process.env.EMAIL_FROM || "onboarding@resend.dev").trim();
 
 // ─── Clients ──────────────────────────────────────────────────────────────────
@@ -288,8 +299,8 @@ async function gatherWithPrompt(twiml: any, text: string) {
     input: "speech",
     action: BASE_URL.startsWith("https://") ? `${BASE_URL}/voice-intake` : "/voice-intake",
     method: "POST",
-    speechTimeout: "auto",
-    timeout: 6,
+    speechTimeout: "2",
+    timeout: 2,
     actionOnEmptyResult: true,
     language: "en-US",
     enhanced: true,
@@ -496,10 +507,18 @@ app.get("/health", async () => ({ ok: true, time: new Date().toISOString() }));
 app.post("/voice-webhook", async (req: any, reply: any) => {
   const VR = twilio.twiml.VoiceResponse;
   const twiml = new VR();
+  const calledNumber = (req.body?.To || "").toString().trim();
   const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
-  getSession(callSid, callerPhone);
-  await gatherWithPrompt(twiml, `Thank you for calling ${COMPANY_NAME}, this is Ed, how can I help you today?`);
+
+  if (calledNumber === MEDSPA_TWILIO_NUMBER) {
+    getMedSpaSession(callSid, callerPhone);
+    await medSpaGather(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`);
+  } else {
+    getSession(callSid, callerPhone);
+    await gatherWithPrompt(twiml, `Thank you for calling ${COMPANY_NAME}, this is Ed, how can I help you today?`);
+  }
+
   reply.type("text/xml");
   return reply.send(twiml.toString());
 });
@@ -562,6 +581,318 @@ app.post("/voice-intake", async (req: any, reply: any) => {
     return reply.send(twiml.toString());
   }
 });
+
+
+
+// ─── Med Spa TTS (OpenAI Nova) ────────────────────────────────────────────────
+async function medSpaTTS(text: string): Promise<string> {
+  if (!openai) throw new Error("OpenAI not configured");
+  const cacheKey = crypto.createHash("sha1").update(`nova_${text}`).digest("hex");
+  const cacheFile = path.join(process.cwd(), "public", "audio", `tts_${cacheKey}.mp3`);
+  if (fs.existsSync(cacheFile)) return `/audio/tts_${cacheKey}.mp3`;
+  fs.mkdirSync(path.join(process.cwd(), "public", "audio"), { recursive: true });
+  const response = await openai.audio.speech.create({
+    model: "tts-1",
+    voice: MEDSPA_OPENAI_VOICE as any,
+    input: text,
+  });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(cacheFile, buffer);
+  return `/audio/tts_${cacheKey}.mp3`;
+}
+
+async function medSpaPlay(twiml: any, text: string) {
+  try {
+    const audioPath = await medSpaTTS(text);
+    if (BASE_URL.startsWith("https://")) { twiml.play(`${BASE_URL}${audioPath}`); return; }
+  } catch (e) { app.log.error({ err: e }, "OpenAI TTS failed"); }
+  twiml.say({ voice: "Polly.Joanna" }, text);
+}
+
+async function medSpaGather(twiml: any, text: string) {
+  const gather = twiml.gather({
+    input: "speech",
+    action: BASE_URL.startsWith("https://") ? `${BASE_URL}/medspa-intake` : "/medspa-intake",
+    method: "POST",
+    speechTimeout: "2",
+    timeout: 2,
+    actionOnEmptyResult: true,
+    language: "en-US",
+    enhanced: true,
+    speechModel: "phone_call",
+    profanityFilter: false,
+  });
+  try {
+    const audioPath = await medSpaTTS(text);
+    if (BASE_URL.startsWith("https://")) { gather.play(`${BASE_URL}${audioPath}`); return; }
+  } catch (e) { app.log.error({ err: e }, "OpenAI TTS gather failed"); }
+  gather.say({ voice: "Polly.Joanna" }, text);
+}
+
+function buildMedSpaPrompt(): string {
+  return `You are ${MEDSPA_AGENT_NAME}, the live receptionist at ${MEDSPA_COMPANY_NAME}, a luxury med spa in ${MEDSPA_SERVICE_AREAS}.
+
+Your personality:
+- Warm, elegant, and professional — like a real high-end spa receptionist
+- Short conversational sentences — never robotic
+- Genuinely interested in helping the caller feel comfortable
+- Sound like a real person, not a bot
+- Maximum 2 sentences unless explaining a service
+
+Hours: ${MEDSPA_HOURS}
+Location: ${MEDSPA_SERVICE_AREAS}
+
+Services and pricing:
+- Botox: $12 per unit, average treatment $250 to $400
+- Lip Fillers: starting at $599
+- Cheek Fillers: starting at $699
+- Microneedling: $299 per session
+- Chemical Peel: $149 to $299 depending on depth
+- Laser Hair Removal: starting at $99 per area
+- HydraFacial: $199 per session
+- IV Therapy: starting at $149
+- Body Contouring: starting at $499
+- Free consultation for all new clients
+
+Booking flow — collect naturally in conversation:
+1. Name — ask like "Of course! Who am I speaking with?"
+2. What service they are interested in
+3. Preferred day and time
+4. Confirm all details warmly before finalizing
+
+Rules:
+- Answer ANY question naturally and intelligently
+- If asked about pain say treatments are well tolerated and comfort is a priority
+- If asked about results say results vary but most clients see great improvement
+- Never make medical claims or guarantees
+- Always recommend a free consultation for specific concerns
+- After booking confirm warmly and tell them they will receive a confirmation shortly
+- NEVER ask the same question twice
+- Return to booking gently after answering questions
+- Sound human every single time`.trim();
+}
+
+type MedSpaStage = "normal" | "book_name" | "book_service" | "book_time" | "book_confirm";
+
+type MedSpaSession = {
+  callSid: string;
+  callerPhone: string;
+  stage: MedSpaStage;
+  silenceCount: number;
+  bookedAndDone: boolean;
+  history: { role: string; content: string }[];
+  booking: { name?: string; service?: string; time?: string; };
+};
+
+const medSpaSessions = new Map<string, MedSpaSession>();
+
+function getMedSpaSession(callSid: string, callerPhone: string): MedSpaSession {
+  const existing = medSpaSessions.get(callSid);
+  if (existing) return existing;
+  const session: MedSpaSession = {
+    callSid, callerPhone, stage: "normal",
+    silenceCount: 0, bookedAndDone: false, history: [], booking: {},
+  };
+  medSpaSessions.set(callSid, session);
+  return session;
+}
+
+async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Promise<string> {
+  if (!openai) return "I can help you book an appointment or answer any questions. What can I help you with today?";
+
+  session.history.push({ role: "user", content: userSpeech });
+
+  const t = userSpeech.toLowerCase();
+
+  // Booking intent detected
+  if (!session.bookedAndDone && (
+    t.includes("book") || t.includes("appointment") ||
+    t.includes("schedule") || t.includes("come in") ||
+    t.includes("visit") || t.includes("consultation")
+  ) && session.stage === "normal") {
+    session.stage = "book_name";
+    session.booking = {};
+    const reply = "I would love to get that set up for you! Who am I speaking with?";
+    session.history.push({ role: "assistant", content: reply });
+    return reply;
+  }
+
+  // Booking flow stages
+  if (session.stage === "book_name") {
+    session.booking.name = userSpeech.trim();
+    session.stage = "book_service";
+    const reply = `Lovely to meet you, ${session.booking.name}! What service are you interested in today?`;
+    session.history.push({ role: "assistant", content: reply });
+    return reply;
+  }
+
+  if (session.stage === "book_service") {
+    session.booking.service = userSpeech.trim();
+    session.stage = "book_time";
+    const reply = `${session.booking.service} is a wonderful choice! What day and time works best for you?`;
+    session.history.push({ role: "assistant", content: reply });
+    return reply;
+  }
+
+  if (session.stage === "book_time") {
+    session.booking.time = userSpeech.trim();
+    session.stage = "book_confirm";
+    const reply = `Perfect! Just to confirm — ${session.booking.name}, ${session.booking.service}, ${session.booking.time}. Does everything look good?`;
+    session.history.push({ role: "assistant", content: reply });
+    return reply;
+  }
+
+  if (session.stage === "book_confirm") {
+    if (["yes","yeah","correct","confirm","sure","sounds good","looks good","perfect","that's right"].some(w => t.includes(w))) {
+      // Book calendar
+      if (calendar && GOOGLE_CALENDAR_ID && session.booking.time) {
+        const start = chrono.parseDate(session.booking.time, new Date(), { forwardDate: true });
+        if (start) {
+          const end = new Date(start.getTime() + 60 * 60000);
+          calendar.events.insert({
+            calendarId: GOOGLE_CALENDAR_ID,
+            requestBody: {
+              summary: `${MEDSPA_COMPANY_NAME} - ${session.booking.service} - ${session.booking.name}`,
+              description: `Client: ${session.booking.name}\nService: ${session.booking.service}\nPhone: ${session.callerPhone}`,
+              start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+              end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+            },
+          }).then(e => app.log.info({ id: e.data.id }, "Med spa calendar booked"))
+            .catch(e => app.log.error({ e }, "Med spa calendar failed"));
+        }
+      }
+      // Send company email
+      if (resend && COMPANY_EMAIL) {
+        resend.emails.send({
+          from: MEDSPA_EMAIL_FROM,
+          to: [COMPANY_EMAIL],
+          subject: `New Appointment - ${MEDSPA_COMPANY_NAME}`,
+          text: `New appointment!\n\nClient: ${session.booking.name}\nService: ${session.booking.service}\nTime: ${session.booking.time}\nPhone: ${session.callerPhone}`,
+        }).catch(() => {});
+      }
+      session.bookedAndDone = true;
+      session.stage = "normal";
+      const firstName = session.booking.name?.split(" ")[0] || "there";
+      const reply = `You are all set, ${firstName}! Your ${session.booking.service} appointment is confirmed for ${session.booking.time}. We look forward to seeing you at ${MEDSPA_COMPANY_NAME}. Is there anything else I can help you with?`;
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+    if (["no","wrong","change","different"].some(w => t.includes(w))) {
+      session.stage = "book_name";
+      session.booking = {};
+      const reply = "No problem at all! Let me start fresh. Who am I speaking with?";
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+  }
+
+  // General AI conversation for anything else
+  const messages: any[] = [
+    { role: "system", content: buildMedSpaPrompt() },
+    ...session.history.slice(-16).map(m => ({ role: m.role, content: m.content })),
+  ];
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.35,
+    max_tokens: 100,
+    messages,
+  });
+
+  const reply = resp.choices[0]?.message?.content?.trim() || "I'm sorry, could you say that again?";
+  session.history.push({ role: "assistant", content: reply });
+  return reply;
+}
+
+async function bookMedSpaCalendar(booking: MedSpaSession["booking"], callerPhone: string) {
+  if (!calendar || !GOOGLE_CALENDAR_ID || !booking.time) return null;
+  const start = chrono.parseDate(booking.time, new Date(), { forwardDate: true });
+  if (!start) return null;
+  const end = new Date(start.getTime() + 60 * 60000);
+  try {
+    const event = await calendar.events.insert({
+      calendarId: GOOGLE_CALENDAR_ID,
+      requestBody: {
+        summary: `${MEDSPA_COMPANY_NAME} - ${booking.service || "Appointment"} - ${booking.name || ""}`,
+        description: `Client: ${booking.name}\nService: ${booking.service}\nPhone: ${callerPhone}`,
+        start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+        end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+      },
+    });
+    app.log.info({ eventId: event.data.id }, "Med spa calendar event created");
+    return event.data;
+  } catch (err) {
+    app.log.error({ err }, "Med spa calendar booking failed");
+    return null;
+  }
+}
+
+// ─── Med Spa Routes ───────────────────────────────────────────────────────────
+
+app.post("/medspa-webhook", async (req: any, reply: any) => {
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
+  const callSid = (req.body?.CallSid || "").toString();
+  const callerPhone = (req.body?.From || "").toString().trim();
+  getMedSpaSession(callSid, callerPhone);
+  await medSpaGather(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`);
+  reply.type("text/xml");
+  return reply.send(twiml.toString());
+});
+
+app.post("/medspa-intake", async (req: any, reply: any) => {
+  const VR = twilio.twiml.VoiceResponse;
+  const twiml = new VR();
+  try {
+    const speech = (req.body?.SpeechResult ?? "").toString().trim();
+    const callSid = (req.body?.CallSid || "").toString();
+    const callerPhone = (req.body?.From || "").toString().trim();
+    const session = getMedSpaSession(callSid, callerPhone);
+
+    app.log.info({ speech, stage: session.stage }, "Med spa speech");
+
+    if (!speech) {
+      session.silenceCount += 1;
+      if (session.silenceCount >= 3) {
+        await medSpaPlay(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}. Please call us back anytime. Have a beautiful day!`);
+        twiml.hangup();
+        reply.type("text/xml");
+        return reply.send(twiml.toString());
+      }
+      await medSpaGather(twiml, "I'm sorry, I didn't catch that. Could you say that again?");
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
+    session.silenceCount = 0;
+    const t = speech.toLowerCase();
+
+    if (["bye","goodbye","that's all","that is all","hang up"].some(w => t.includes(w))) {
+      await medSpaPlay(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}. Have a beautiful day!`);
+      twiml.hangup();
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
+    if (isThanks(speech) && session.bookedAndDone) {
+      await medSpaPlay(twiml, `Of course! We look forward to seeing you. Have a wonderful day!`);
+      twiml.hangup();
+      reply.type("text/xml");
+      return reply.send(twiml.toString());
+    }
+
+    const responseText = await handleMedSpaTurn(session, speech);
+    await medSpaGather(twiml, responseText);
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  } catch (err) {
+    app.log.error({ err }, "medspa-intake error");
+    await medSpaGather(twiml, "I'm sorry, I had a little trouble. Could you say that again?");
+    reply.type("text/xml");
+    return reply.send(twiml.toString());
+  }
+});
+
 
 app.setErrorHandler((err, _req, reply) => {
   app.log.error({ err }, "global error");
