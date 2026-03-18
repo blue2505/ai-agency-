@@ -511,7 +511,8 @@ app.post("/voice-webhook", async (req: any, reply: any) => {
   const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
 
-  if (calledNumber === MEDSPA_TWILIO_NUMBER) {
+ app.log.info({ calledNumber, MEDSPA_TWILIO_NUMBER }, "Number detection debug"); 
+ if (calledNumber === MEDSPA_TWILIO_NUMBER) {
     getMedSpaSession(callSid, callerPhone);
     await medSpaGather(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`);
   } else {
