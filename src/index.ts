@@ -603,10 +603,6 @@ async function medSpaTTS(text: string): Promise<string> {
 }
 
 async function medSpaPlay(twiml: any, text: string) {
-  try {
-    const audioPath = await medSpaTTS(text);
-    if (BASE_URL.startsWith("https://")) { twiml.play(`${BASE_URL}${audioPath}`); return; }
-  } catch (e) { app.log.error({ err: e }, "OpenAI TTS failed"); }
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
@@ -623,10 +619,6 @@ async function medSpaGather(twiml: any, text: string) {
     speechModel: "phone_call",
     profanityFilter: false,
   });
-  try {
-    const audioPath = await medSpaTTS(text);
-    if (BASE_URL.startsWith("https://")) { gather.play(`${BASE_URL}${audioPath}`); return; }
-  } catch (e) { app.log.error({ err: e }, "OpenAI TTS gather failed"); }
   gather.say({ voice: "Polly.Joanna" }, text);
 }
 
