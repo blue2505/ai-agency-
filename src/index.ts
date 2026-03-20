@@ -57,6 +57,7 @@ const MEDSPA_HOURS = (process.env.MEDSPA_HOURS || "Monday through Saturday 9 AM 
 const MEDSPA_SERVICE_AREAS = (process.env.MEDSPA_SERVICE_AREAS || "Orlando and surrounding areas").trim();
 const MEDSPA_OPENAI_VOICE = (process.env.MEDSPA_OPENAI_VOICE || "nova").trim();
 const MEDSPA_EMAIL_FROM = (process.env.MEDSPA_EMAIL_FROM || "onboarding@resend.dev").trim();
+const MEDSPA_ELEVENLABS_VOICE_ID = (process.env.MEDSPA_ELEVENLABS_VOICE_ID || "kPzsL2i3teMYv0FxEYQ6").trim();
 
 const EMAIL_FROM = (process.env.EMAIL_FROM || "onboarding@resend.dev").trim();
 
@@ -622,22 +623,37 @@ app.post("/voice-intake", async (req: any, reply: any) => {
 
 // ─── Med Spa TTS (OpenAI Nova) ────────────────────────────────────────────────
 async function medSpaTTS(text: string): Promise<string> {
-  if (!openai) throw new Error("OpenAI not configured");
-  const cacheKey = crypto.createHash("sha1").update(`nova_${text}`).digest("hex");
-  const cacheFile = path.join(process.cwd(), "public", "audio", `tts_${cacheKey}.mp3`);
-  if (fs.existsSync(cacheFile)) return `/audio/tts_${cacheKey}.mp3`;
-  fs.mkdirSync(path.join(process.cwd(), "public", "audio"), { recursive: true });
-  const response = await openai.audio.speech.create({
-    model: "tts-1",
-    voice: MEDSPA_OPENAI_VOICE as any,
-    input: text,
+  const hash = crypto.createHash("sha1").update(`sofia_${text}`).digest("hex");
+  const file = `tts_${hash}.mp3`;
+  const abs = path.join(ensureAudioDir(), file);
+  const rel = `/audio/${file}`;
+  if (fs.existsSync(abs)) return rel;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 3000);
+  const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${MEDSPA_ELEVENLABS_VOICE_ID}`, {
+    signal: controller.signal,
+    method: "POST",
+    headers: {
+      "xi-api-key": ELEVENLABS_API_KEY,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_flash_v2_5",
+      voice_settings: { stability: 0.45, similarity_boost: 0.88, style: 0.08, use_speaker_boost: true },
+    }),
   });
-  const buffer = Buffer.from(await response.arrayBuffer());
-  fs.writeFileSync(cacheFile, buffer);
-  return `/audio/tts_${cacheKey}.mp3`;
+  if (!resp.ok) throw new Error(`ElevenLabs ${resp.status}: ${await resp.text()}`);
+  fs.writeFileSync(abs, Buffer.from(await resp.arrayBuffer()));
+  return rel;
 }
 
 async function medSpaPlay(twiml: any, text: string) {
+  try {
+    const rel = await medSpaTTS(text);
+    if (BASE_URL.startsWith("https://")) { twiml.play(`${BASE_URL}${rel}`); return; }
+  } catch (e) { app.log.error({ err: e }, "Sofia ElevenLabs failed"); }
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
@@ -654,6 +670,10 @@ async function medSpaGather(twiml: any, text: string) {
     speechModel: "phone_call",
     profanityFilter: false,
   });
+  try {
+    const rel = await medSpaTTS(text);
+    if (BASE_URL.startsWith("https://")) { gather.play(`${BASE_URL}${rel}`); return; }
+  } catch (e) { app.log.error({ err: e }, "Sofia gather ElevenLabs failed"); }
   gather.say({ voice: "Polly.Joanna" }, text);
 }
 
