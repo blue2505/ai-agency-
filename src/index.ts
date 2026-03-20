@@ -629,7 +629,7 @@ async function medSpaTTS(text: string): Promise<string> {
   const rel = `/audio/${file}`;
   if (fs.existsSync(abs)) return rel;
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 3000);
+  setTimeout(() => controller.abort(), 5000);
   const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${MEDSPA_ELEVENLABS_VOICE_ID}`, {
     signal: controller.signal,
     method: "POST",
