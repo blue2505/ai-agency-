@@ -509,6 +509,36 @@ async function handleTurn(session: Session, userSpeech: string): Promise<string>
 
 app.get("/health", async () => ({ ok: true, time: new Date().toISOString() }));
 
+// Pre-cache common phrases at startup
+async function warmupAudio() {
+  if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) return;
+  if (!BASE_URL.startsWith("https://")) return;
+  
+  const phrases = [
+    `Thank you for calling ${COMPANY_NAME}, this is Ed, how can I help you today?`,
+    "Sure, who am I speaking with?",
+    "What seems to be the issue with your system today?",
+    "What day and time works best for you?",
+    "And what is the service address?",
+    "Could you share your email for a confirmation, or just say skip?",
+    "You are all set! A technician will reach out shortly. Anything else?",
+    "I am sorry, I did not catch that. Could you say that again?",
+    "Thank you for calling. Have a wonderful day!",
+    "Let me get that scheduled for you.",
+  ];
+
+  app.log.info("Warming up audio cache...");
+  for (const phrase of phrases) {
+    try {
+      await elevenLabsTTS(phrase);
+      app.log.info({ phrase: phrase.slice(0, 40) }, "Cached phrase");
+    } catch (e) {
+      app.log.error({ err: e }, "Warmup failed for phrase");
+    }
+  }
+  app.log.info("Audio warmup complete!");
+}
+
 app.post("/voice-webhook", async (req: any, reply: any) => {
   const VR = twilio.twiml.VoiceResponse;
   const twiml = new VR();
@@ -901,6 +931,7 @@ app.setErrorHandler((err, _req, reply) => {
 
 app.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
   console.log(`✅ ${COMPANY_NAME} AI Agent running on port ${PORT}`);
+  warmupAudio().catch(() => {});
   console.log(`📅 Calendar: ${calendar ? "✅ connected" : "❌ not configured"}`);
   console.log(`📧 Resend:   ${resend ? "✅ connected" : "❌ not configured"}`);
   console.log(`💬 SMS:      ${smsClient ? "✅ connected" : "❌ not configured"}`);
