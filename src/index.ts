@@ -629,7 +629,7 @@ async function medSpaTTS(text: string): Promise<string> {
   const rel = `/audio/${file}`;
   if (fs.existsSync(abs)) return rel;
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 5000);
+  setTimeout(() => controller.abort(), 8000);
   const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${MEDSPA_ELEVENLABS_VOICE_ID}`, {
     signal: controller.signal,
     method: "POST",
@@ -653,7 +653,7 @@ async function medSpaPlay(twiml: any, text: string) {
   try {
     const rel = await medSpaTTS(text);
     if (BASE_URL.startsWith("https://")) { twiml.play(`${BASE_URL}${rel}`); return; }
-  } catch (e) { app.log.error({ err: e }, "Sofia ElevenLabs failed"); }
+  } catch (e) { app.log.error({ err: e, voiceId: MEDSPA_ELEVENLABS_VOICE_ID }, "Sofia ElevenLabs failed - falling back to Polly"); }
   twiml.say({ voice: "Polly.Joanna" }, text);
 }
 
