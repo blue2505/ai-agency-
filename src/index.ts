@@ -730,7 +730,7 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
         ...session.history.slice(-10).map(m => ({ role: m.role, content: m.content })),
         { role: "system", content: "The caller asked about availability or timing. Tell them we have openings available and ask what day and time works best for them." }
       ];
-      const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.3, max_tokens: 60, messages });
+      const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.2, max_tokens: 50, messages });
       const reply = resp.choices[0]?.message?.content?.trim() || "We have openings available throughout the week! What day and time works best for you?";
       session.history.push({ role: "assistant", content: reply });
       return reply;
@@ -791,19 +791,44 @@ Phone: ${session.callerPhone}`,
     }
   }
 
-  if (!session.bookedAndDone && ["book","appointment","schedule","consultation","come in","visit"].some(w => t.includes(w)) && session.stage === "normal") {
-    session.stage = "book_name";
-    session.booking = {};
-    const reply = "I would love to get that set up for you! Who am I speaking with?";
-    session.history.push({ role: "assistant", content: reply });
-    return reply;
+  if (session.stage === "normal") {
+    // Detect service mentioned in first message
+    const services = ["botox","filler","lip","cheek","microneedling","chemical peel","laser","hydrafacial","iv therapy","body contouring","consultation","facial"];
+    const mentionedService = services.find(s => t.includes(s));
+
+    if (!session.bookedAndDone && ["book","appointment","schedule","consultation","come in","visit","make an"].some(w => t.includes(w))) {
+      session.stage = "book_name";
+      session.booking = {};
+      if (mentionedService) {
+        session.booking.service = userSpeech.trim();
+        const reply = "I would love to get that booked for you! Who am I speaking with?";
+        session.history.push({ role: "assistant", content: reply });
+        return reply;
+      }
+      const reply = "I would love to get that set up for you! Who am I speaking with?";
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+  }
+
+  if (session.stage === "book_name" && session.booking.service) {
+    // Service already captured — skip book_service stage
+    const isQuestion = t.includes("what") || t.includes("how") || t.includes("offer") || t.includes("price") || t.includes("cost") || t.includes("which") || t.includes("?");
+    if (!isQuestion && userSpeech.trim().length > 1) {
+      session.booking.name = userSpeech.trim();
+      session.stage = "book_time";
+      const reply = `Great ${session.booking.name}! What day and time works best for you?`;
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
   }
 
   const messages: any[] = [
     { role: "system", content: buildMedSpaPrompt() },
+    { role: "system", content: "Answer ANY question the caller asks naturally and helpfully. If they ask about providers, staff, or specific requests, acknowledge it warmly and do your best to help. Never ignore a question." },
     ...session.history.slice(-16).map(m => ({ role: m.role, content: m.content })),
   ];
-  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.3, max_tokens: 60, messages });
+  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.2, max_tokens: 50, messages });
   const reply = resp.choices[0]?.message?.content?.trim() || "I am sorry, could you say that again?";
   session.history.push({ role: "assistant", content: reply });
   return reply;
