@@ -670,11 +670,7 @@ async function medSpaGather(twiml: any, text: string) {
     speechModel: "phone_call",
     profanityFilter: false,
   });
-  try {
-    const rel = await medSpaTTS(text);
-    if (BASE_URL.startsWith("https://")) { gather.play(`${BASE_URL}${rel}`); return; }
-  } catch (e) { app.log.error({ err: e }, "Sofia gather ElevenLabs failed"); }
-  gather.say({ voice: "Polly.Joanna" }, text);
+  await medSpaPlay(gather, text);
 }
 
 function buildMedSpaPrompt(): string {
@@ -877,6 +873,9 @@ async function bookMedSpaCalendar(booking: MedSpaSession["booking"], callerPhone
 
 // ─── Med Spa Routes ───────────────────────────────────────────────────────────
 
+
+// ─── Med Spa Routes (same structure as HVAC) ──────────────────────────────────
+
 app.post("/medspa-webhook", async (req: any, reply: any) => {
   const VR = twilio.twiml.VoiceResponse;
   const twiml = new VR();
@@ -907,15 +906,14 @@ app.post("/medspa-intake", async (req: any, reply: any) => {
         reply.type("text/xml");
         return reply.send(twiml.toString());
       }
-      await medSpaGather(twiml, "I'm sorry, I didn't catch that. Could you say that again?");
+      await medSpaGather(twiml, "I am sorry, I did not catch that. Could you say that again?");
       reply.type("text/xml");
       return reply.send(twiml.toString());
     }
 
     session.silenceCount = 0;
-    const t = speech.toLowerCase();
 
-    if (["bye","goodbye","that's all","that is all","hang up"].some(w => t.includes(w))) {
+    if (isBye(speech)) {
       await medSpaPlay(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}. Have a beautiful day!`);
       twiml.hangup();
       reply.type("text/xml");
@@ -935,17 +933,13 @@ app.post("/medspa-intake", async (req: any, reply: any) => {
     return reply.send(twiml.toString());
   } catch (err) {
     app.log.error({ err }, "medspa-intake error");
-    await medSpaGather(twiml, "I'm sorry, I had a little trouble. Could you say that again?");
+    await medSpaGather(twiml, "I am sorry, I had a little trouble. Could you say that again?");
     reply.type("text/xml");
     return reply.send(twiml.toString());
   }
 });
 
 
-app.setErrorHandler((err, _req, reply) => {
-  app.log.error({ err }, "global error");
-  reply.status(200).type("text/xml").send(`<Response><Say voice="Polly.Joanna">I'm sorry, something went wrong. Please try again.</Say><Redirect method="POST">/voice-webhook</Redirect></Response>`);
-});
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
