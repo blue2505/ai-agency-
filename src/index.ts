@@ -904,7 +904,21 @@ app.post("/medspa-webhook", async (req: any, reply: any) => {
   const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
   getMedSpaSession(callSid, callerPhone);
-  await medSpaGather(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`);
+  const gather = twiml.gather({
+    input: "speech",
+    action: BASE_URL.startsWith("https://") ? `${BASE_URL}/medspa-intake` : "/medspa-intake",
+    method: "POST",
+    speechTimeout: "auto",
+    timeout: 8,
+    actionOnEmptyResult: true,
+    language: "en-US",
+    enhanced: true,
+    speechModel: "phone_call",
+    profanityFilter: false,
+  });
+  const greetingText = `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`;
+  medSpaTTS(greetingText).catch(() => {});
+  gather.say({ voice: "Polly.Joanna" }, greetingText);
   reply.type("text/xml");
   return reply.send(twiml.toString());
 });
