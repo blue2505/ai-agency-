@@ -272,7 +272,10 @@ async function elevenLabsTTS(text: string): Promise<string> {
   const abs = path.join(ensureAudioDir(), file);
   const rel = `/audio/${file}`;
   if (fs.existsSync(abs)) return rel;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 4000);
   const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
+    signal: controller.signal,
     method: "POST",
     headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json", Accept: "audio/mpeg" },
     body: JSON.stringify({
@@ -302,7 +305,7 @@ async function gatherWithPrompt(twiml: any, text: string) {
     speechTimeout: "2",
     timeout: 2,
     actionOnEmptyResult: true,
-    language: "en-US",
+    language: "es-US",
     enhanced: true,
     speechModel: "phone_call",
     profanityFilter: false,
@@ -361,7 +364,14 @@ Rules:
 - Answer questions naturally and return to booking gently
 - 1–3 sentences max unless explaining services
 - Sound human every single time
-- If they ask what services you offer, give a warm friendly summary — never a robotic list`.trim();
+- If they ask what services you offer, give a warm friendly summary — never a robotic list
+
+Language:
+- If the caller speaks Spanish respond entirely in Spanish
+- If the caller speaks English respond in English
+- Match the caller's language automatically
+- Never mix languages in the same response
+- Spanish example: "Gracias por llamar a ${COMPANY_NAME}, ¿en qué le puedo ayudar?"`.trim();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -614,7 +624,7 @@ async function medSpaGather(twiml: any, text: string) {
     speechTimeout: "2",
     timeout: 2,
     actionOnEmptyResult: true,
-    language: "en-US",
+    language: "es-US",
     enhanced: true,
     speechModel: "phone_call",
     profanityFilter: false,
