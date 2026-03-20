@@ -649,12 +649,12 @@ async function medSpaTTS(text: string): Promise<string> {
   return rel;
 }
 
-async function medSpaPlay(twiml: any, text: string) {
+async function medSpaPlay(node: any, text: string) {
   try {
     const rel = await medSpaTTS(text);
-    if (BASE_URL.startsWith("https://")) { twiml.play(`${BASE_URL}${rel}`); return; }
-  } catch (e) { app.log.error({ err: e, voiceId: MEDSPA_ELEVENLABS_VOICE_ID }, "Sofia ElevenLabs failed - falling back to Polly"); }
-  twiml.say({ voice: "Polly.Joanna" }, text);
+    if (BASE_URL.startsWith("https://")) { node.play(`${BASE_URL}${rel}`); return; }
+  } catch (e) { app.log.error({ err: e }, "Sofia ElevenLabs failed, using Polly"); }
+  node.say({ voice: "Polly.Joanna" }, text);
 }
 
 async function medSpaGather(twiml: any, text: string) {
@@ -904,21 +904,7 @@ app.post("/medspa-webhook", async (req: any, reply: any) => {
   const callSid = (req.body?.CallSid || "").toString();
   const callerPhone = (req.body?.From || "").toString().trim();
   getMedSpaSession(callSid, callerPhone);
-  const gather = twiml.gather({
-    input: "speech",
-    action: BASE_URL.startsWith("https://") ? `${BASE_URL}/medspa-intake` : "/medspa-intake",
-    method: "POST",
-    speechTimeout: "auto",
-    timeout: 8,
-    actionOnEmptyResult: true,
-    language: "en-US",
-    enhanced: true,
-    speechModel: "phone_call",
-    profanityFilter: false,
-  });
-  const greetingText = `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`;
-  medSpaTTS(greetingText).catch(() => {});
-  gather.say({ voice: "Polly.Joanna" }, greetingText);
+  await medSpaGather(twiml, `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`);
   reply.type("text/xml");
   return reply.send(twiml.toString());
 });
