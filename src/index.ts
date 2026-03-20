@@ -952,6 +952,20 @@ app.setErrorHandler((err, _req, reply) => {
 app.listen({ port: PORT, host: "0.0.0.0" }).then(() => {
   console.log(`✅ ${COMPANY_NAME} AI Agent running on port ${PORT}`);
   warmupAudio().catch(() => {});
+  // Warmup Sofia phrases
+  const sofiaWarmup = [
+    `Thank you for calling ${MEDSPA_COMPANY_NAME}, this is ${MEDSPA_AGENT_NAME}! How can I help you today?`,
+    "I would love to get that scheduled for you! What is your name?",
+    "What service are you interested in today?",
+    "What day and time works best for you?",
+    "Just to confirm, does everything look good?",
+    `You are all set! We look forward to seeing you at ${MEDSPA_COMPANY_NAME}!`,
+    "I am sorry, I did not catch that. Could you say that again?",
+    `Thank you for calling ${MEDSPA_COMPANY_NAME}. Have a beautiful day!`,
+  ];
+  Promise.all(sofiaWarmup.map(p => medSpaTTS(p).catch(() => {}))).then(() => {
+    app.log.info("Sofia audio warmup complete!");
+  });
   console.log(`📅 Calendar: ${calendar ? "✅ connected" : "❌ not configured"}`);
   console.log(`📧 Resend:   ${resend ? "✅ connected" : "❌ not configured"}`);
   console.log(`💬 SMS:      ${smsClient ? "✅ connected" : "❌ not configured"}`);
