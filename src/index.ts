@@ -302,10 +302,10 @@ async function gatherWithPrompt(twiml: any, text: string) {
     input: "speech",
     action: BASE_URL.startsWith("https://") ? `${BASE_URL}/voice-intake` : "/voice-intake",
     method: "POST",
-    speechTimeout: "1",
-    timeout: 1,
+    speechTimeout: "2",
+    timeout: 2,
     actionOnEmptyResult: true,
-    language: "es-US",
+    language: "en-US",
     enhanced: true,
     speechModel: "phone_call",
     profanityFilter: false,
@@ -366,12 +366,7 @@ Rules:
 - Sound human every single time
 - If they ask what services you offer, give a warm friendly summary — never a robotic list
 
-Language:
-- If the caller speaks Spanish respond entirely in Spanish
-- If the caller speaks English respond in English
-- Match the caller's language automatically
-- Never mix languages in the same response
-- Spanish example: "Gracias por llamar a ${COMPANY_NAME}, ¿en qué le puedo ayudar?"`.trim();
+- Always respond in English only`.trim();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -621,10 +616,10 @@ async function medSpaGather(twiml: any, text: string) {
     input: "speech",
     action: BASE_URL.startsWith("https://") ? `${BASE_URL}/medspa-intake` : "/medspa-intake",
     method: "POST",
-    speechTimeout: "1",
-    timeout: 1,
+    speechTimeout: "2",
+    timeout: 2,
     actionOnEmptyResult: true,
-    language: "es-US",
+    language: "en-US",
     enhanced: true,
     speechModel: "phone_call",
     profanityFilter: false,
