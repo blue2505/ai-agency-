@@ -677,16 +677,16 @@ function buildMedSpaPrompt(): string {
   return `You are ${MEDSPA_AGENT_NAME}, the live receptionist at ${MEDSPA_COMPANY_NAME}, a luxury med spa in ${MEDSPA_SERVICE_AREAS}.
 
 Your personality:
-- Warm, elegant, and professional — like a real high-end spa receptionist
-- Short conversational sentences — never robotic
+- Warm, elegant, and professional like a real high end spa receptionist
+- Short conversational sentences, never robotic
 - Genuinely interested in helping the caller feel comfortable
 - Sound like a real person, not a bot
-- Maximum 2 sentences unless explaining a service
+- Maximum 2 sentences unless listing services or explaining pricing
 
 Hours: ${MEDSPA_HOURS}
 Location: ${MEDSPA_SERVICE_AREAS}
 
-Services and pricing:
+Services and pricing we offer:
 - Botox: $12 per unit, average treatment $250 to $400
 - Lip Fillers: starting at $599
 - Cheek Fillers: starting at $699
@@ -698,22 +698,26 @@ Services and pricing:
 - Body Contouring: starting at $499
 - Free consultation for all new clients
 
-Booking flow — collect naturally in conversation:
-1. Name — ask like "Of course! Who am I speaking with?"
-2. What service they are interested in
-3. Preferred day and time
-4. Confirm all details warmly before finalizing
-
-Rules:
+CRITICAL RULES:
+- If caller asks what services we offer, list ALL services with prices naturally
+- If caller asks about a specific service, explain it warmly and mention the price
+- NEVER treat a question as a booking stage answer
+- If caller asks a question during booking flow, answer it first then return to booking
+- Never say a question back as if it were a service name
+- If someone says "what services do you offer" respond with the full list
 - Answer ANY question naturally and intelligently
 - If asked about pain say treatments are well tolerated and comfort is a priority
 - If asked about results say results vary but most clients see great improvement
 - Never make medical claims or guarantees
 - Always recommend a free consultation for specific concerns
-- After booking confirm warmly and tell them they will receive a confirmation shortly
 - NEVER ask the same question twice
-- Return to booking gently after answering questions
-- Sound human every single time`.trim();
+- Sound human every single time
+
+Booking flow:
+1. Get their name naturally
+2. Ask what service they are interested in
+3. Get preferred day and time
+4. Confirm all details warmly before finalizing`.trim();
 }
 
 type MedSpaStage = "normal" | "book_name" | "book_service" | "book_time" | "book_confirm";
@@ -771,9 +775,27 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
   }
 
   if (session.stage === "book_service") {
+    const isQuestion = t.includes("what") || t.includes("how") || t.includes("do you") || 
+                       t.includes("offer") || t.includes("price") || t.includes("cost") ||
+                       t.includes("which") || t.includes("tell me") || t.includes("?");
+    
+    if (isQuestion) {
+      // Answer the question then ask again
+      session.history.push({ role: "user", content: userSpeech });
+      const messages: any[] = [
+        { role: "system", content: buildMedSpaPrompt() },
+        ...session.history.slice(-10).map(m => ({ role: m.role, content: m.content })),
+        { role: "system", content: "The caller asked a question during booking. Answer it warmly and naturally, then gently ask what service they are interested in." }
+      ];
+      const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.3, max_tokens: 120, messages });
+      const reply = resp.choices[0]?.message?.content?.trim() || "Great question! We offer Botox, fillers, microneedling, HydraFacials, laser hair removal, IV therapy and body contouring. What service interests you?";
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
+    
     session.booking.service = userSpeech.trim();
     session.stage = "book_time";
-    const reply = `${session.booking.service} is a wonderful choice! What day and time works best for you?`;
+    const reply = `Wonderful choice! What day and time works best for you?`;
     session.history.push({ role: "assistant", content: reply });
     return reply;
   }
