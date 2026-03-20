@@ -273,7 +273,7 @@ async function elevenLabsTTS(text: string): Promise<string> {
   const rel = `/audio/${file}`;
   if (fs.existsSync(abs)) return rel;
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 4000);
+  setTimeout(() => controller.abort(), 3000);
   const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
     signal: controller.signal,
     method: "POST",
@@ -302,8 +302,8 @@ async function gatherWithPrompt(twiml: any, text: string) {
     input: "speech",
     action: BASE_URL.startsWith("https://") ? `${BASE_URL}/voice-intake` : "/voice-intake",
     method: "POST",
-    speechTimeout: "2",
-    timeout: 2,
+    speechTimeout: "1",
+    timeout: 1,
     actionOnEmptyResult: true,
     language: "es-US",
     enhanced: true,
@@ -504,7 +504,7 @@ async function handleTurn(session: Session, userSpeech: string): Promise<string>
     ...session.history.slice(-18).map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content })),
   ];
 
-  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 130, messages });
+  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 80, messages });
   const reply = resp.choices[0]?.message?.content?.trim() || "I'm sorry, could you say that again?";
   session.history.push({ role: "assistant", content: reply });
   return reply;
@@ -621,8 +621,8 @@ async function medSpaGather(twiml: any, text: string) {
     input: "speech",
     action: BASE_URL.startsWith("https://") ? `${BASE_URL}/medspa-intake` : "/medspa-intake",
     method: "POST",
-    speechTimeout: "2",
-    timeout: 2,
+    speechTimeout: "1",
+    timeout: 1,
     actionOnEmptyResult: true,
     language: "es-US",
     enhanced: true,
@@ -798,7 +798,7 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
     temperature: 0.35,
-    max_tokens: 100,
+    max_tokens: 80,
     messages,
   });
 
