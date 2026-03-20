@@ -500,7 +500,7 @@ async function handleTurn(session: Session, userSpeech: string): Promise<string>
     ...session.history.slice(-18).map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content })),
   ];
 
-  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 80, messages });
+  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 60, messages });
   const reply = resp.choices[0]?.message?.content?.trim() || "I'm sorry, could you say that again?";
   session.history.push({ role: "assistant", content: reply });
   return reply;
@@ -687,15 +687,15 @@ Hours: ${MEDSPA_HOURS}
 Location: ${MEDSPA_SERVICE_AREAS}
 
 Services and pricing we offer:
-- Botox: $12 per unit, average treatment $250 to $400
-- Lip Fillers: starting at $599
-- Cheek Fillers: starting at $699
-- Microneedling: $299 per session
-- Chemical Peel: $149 to $299 depending on depth
-- Laser Hair Removal: starting at $99 per area
-- HydraFacial: $199 per session
-- IV Therapy: starting at $149
-- Body Contouring: starting at $499
+- Botox: twelve dollars per unit, average treatment two fifty to four hundred
+- Lip Fillers: starting at five ninety nine
+- Cheek Fillers: starting at six ninety nine
+- Microneedling: two ninety nine per session
+- Chemical Peel: one forty nine to two ninety nine depending on depth
+- Laser Hair Removal: starting at ninety nine per area
+- HydraFacial: one ninety nine per session
+- IV Therapy: starting at one forty nine
+- Body Contouring: starting at four ninety nine
 - Free consultation for all new clients
 
 CRITICAL RULES:
@@ -861,7 +861,7 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
     temperature: 0.35,
-    max_tokens: 80,
+    max_tokens: 60,
     messages,
   });
 
@@ -1470,7 +1470,7 @@ async function handleTurn(session: Session, userSpeech: string): Promise<string>
     ...session.history.slice(-18).map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content })),
   ];
 
-  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 80, messages });
+  const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.4, max_tokens: 60, messages });
   const reply = resp.choices[0]?.message?.content?.trim() || "I'm sorry, could you say that again?";
   session.history.push({ role: "assistant", content: reply });
   return reply;
@@ -1657,15 +1657,15 @@ Hours: ${MEDSPA_HOURS}
 Location: ${MEDSPA_SERVICE_AREAS}
 
 Services and pricing we offer:
-- Botox: $12 per unit, average treatment $250 to $400
-- Lip Fillers: starting at $599
-- Cheek Fillers: starting at $699
-- Microneedling: $299 per session
-- Chemical Peel: $149 to $299 depending on depth
-- Laser Hair Removal: starting at $99 per area
-- HydraFacial: $199 per session
-- IV Therapy: starting at $149
-- Body Contouring: starting at $499
+- Botox: twelve dollars per unit, average treatment two fifty to four hundred
+- Lip Fillers: starting at five ninety nine
+- Cheek Fillers: starting at six ninety nine
+- Microneedling: two ninety nine per session
+- Chemical Peel: one forty nine to two ninety nine depending on depth
+- Laser Hair Removal: starting at ninety nine per area
+- HydraFacial: one ninety nine per session
+- IV Therapy: starting at one forty nine
+- Body Contouring: starting at four ninety nine
 - Free consultation for all new clients
 
 CRITICAL RULES:
@@ -1831,7 +1831,7 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
     temperature: 0.35,
-    max_tokens: 80,
+    max_tokens: 60,
     messages,
   });
 
