@@ -721,6 +721,20 @@ async function handleMedSpaTurn(session: MedSpaSession, userSpeech: string): Pro
   }
 
   if (session.stage === "book_time") {
+    const isQuestion = t.includes("what") || t.includes("when") || t.includes("how") || 
+                       t.includes("availab") || t.includes("open") || t.includes("do you") ||
+                       t.includes("?") || t.includes("which");
+    if (isQuestion) {
+      const messages: any[] = [
+        { role: "system", content: buildMedSpaPrompt() },
+        ...session.history.slice(-10).map(m => ({ role: m.role, content: m.content })),
+        { role: "system", content: "The caller asked about availability or timing. Tell them we have openings available and ask what day and time works best for them." }
+      ];
+      const resp = await openai.chat.completions.create({ model: OPENAI_MODEL, temperature: 0.3, max_tokens: 60, messages });
+      const reply = resp.choices[0]?.message?.content?.trim() || "We have openings available throughout the week! What day and time works best for you?";
+      session.history.push({ role: "assistant", content: reply });
+      return reply;
+    }
     session.booking.time = userSpeech.trim();
     session.stage = "book_confirm";
     const reply = `Perfect! Just to confirm — ${session.booking.name}, ${session.booking.service}, ${session.booking.time}. Does everything look good?`;
